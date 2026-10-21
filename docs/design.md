@@ -82,21 +82,20 @@ Typing presses shift before a shifted key. Each key is held 40–95 ms. Gaps bet
 | Tool | Does |
 |---|---|
 | `list_windows` | Lists on-screen app windows, frontmost first, with ids and global bounds. |
-| `screenshot` | Captures the main display, or one app window (`window_id` or `app`) even when other windows cover it. Returns a JPEG at most 1568 px wide, plus its origin, scale and the cursor position in both coordinate spaces. |
-| `cursor_position` | Returns the cursor position, global and relative to the main display or a window. |
-| `mouse_move` | Moves along a human-like path to `x, y`. `size` is the target size. |
-| `click` | Optionally moves first, then clicks: `button` left/right/middle, `count` 1 or 2. |
-| `drag` | Holds the left button from the current position to `x, y`. |
-| `scroll` | Scrolls `dy` and `dx` wheel notches. Positive values scroll down and right. |
-| `type_text` | Types `text` at `wpm`, US keyboard characters only. |
-| `key` | Presses a key or combination, such as `enter` or `cmd+shift+4`. |
+| `screenshot` | A new shot of the main display or one window (`window_id` or `app`, even when covered), 1024 px wide by default. With `shot` and `region` it zooms into an earlier shot at up to 1568 px, never upscaled. With `shot` and `mark` it draws a crosshair where that pixel lands (and zooms around it when no region is given). |
+| `act` | Runs up to 20 steps in order: `move`, `click`, `double_click`, `right_click`, `drag`, `scroll`, `type`, `key`, `wait`, `wait_for` (`change` or `stable`). Validates every step before anything moves, stops at the first failure, then returns a new low shot (`observe`, default on). |
+| `cursor_position` | Returns the cursor in global points and in a shot's pixels. |
+| `mouse_move`, `click`, `drag`, `scroll`, `type_text`, `key` | One step each, with `observe` off by default. |
 
-### Coordinates
+### Shots and coordinates
 
-- **Global:** display points, shared by every screen and window. The mouse moves in this space.
-- **Relative:** pixels of a frame's screenshot. A frame is the main display (the default) or one window (`window_id` or `app`).
-- **Conversion:** `global = origin + pixel × scale`. Every screenshot returns its `origin` and `scale`. Locations come back with both `global` and `relative` (relative is left out when the point is outside the frame).
-- **Mouse tools take relative coordinates** for the frame they name, so an agent can act straight from a window screenshot. A window's bounds are read again at action time, so a window that has moved still works. A point that another window covers is refused, since the click would land on the other window.
+The model's turns, not vnkvm, set the pace of an agent: each turn takes seconds, each action about one. So the tools aim at fewer turns: a cheap first look, zoom only where needed, several actions per turn, and the next look returned with the actions.
+
+- **Shot:** every image gets an id. The server keeps the last 32: the frame (main display or window id), the region it covers in frame points, the image size and the scale (points per pixel).
+- **Coordinates are pixels of a named shot.** The pixel's center maps to `global = frame origin now + region origin + (pixel + 0.5) × scale`. A coordinate never travels without its shot, so a low look and a zoom cannot be confused.
+- **Frames move, pixels do not.** A window is looked up again at action time: a moved window is followed; a resized or closed one is refused, since its content has reflowed. A point another window covers is refused, since the click would land there.
+- **Capture:** `screencapture` writes the frame at full resolution (2 pixels per point on Retina), the server crops the region and scales it down with a box filter so small text stays readable, then encodes JPEG. A zoom captures again, so it shows the screen as it is now.
+- **Settle and change:** after actions, the server compares fast 640 px previews of the main display (ScreenCaptureKit) inside the frame. Fewer than 20 changed preview pixels between frames 100 ms apart counts as still, so a blinking caret does not count; more than 40 against the frame before an action counts as a change. A window off the main display falls back to a fixed wait.
 
 ## Browser viewer (`vnkvm serve`)
 
@@ -149,5 +148,6 @@ Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds 
 
 - **v1**: both input paths, human-like engine with take-over detection, MCP over stdio, screen and window screenshots.
 - **v2**: browser viewer with an MJPEG stream and remote control, token roles, one controller at a time.
-- **v2.1 (this)**: H.264 (VideoToolbox → WebCodecs) with MJPEG fallback, Tailscale sharing with HTTPS via `tailscale serve`, one-line installer, `doctor`.
+- **v2.1**: H.264 (VideoToolbox → WebCodecs) with MJPEG fallback, Tailscale sharing with HTTPS via `tailscale serve`, one-line installer, `doctor`.
+- **v2.2 (this)**: shot ids, low-detail first looks with zoom and aim marks, `act` sequences with settle and change detection, and a skill that teaches the agent to plan sequences.
 - **v3**: launchd units for the bridge and daemon, full-display capture of secondary screens (windows on any screen already work), and Linux (USB gadget on `dummy_hcd` or USB/IP) and Windows targets.

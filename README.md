@@ -70,14 +70,16 @@ virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 
 | Tool | Does |
 |---|---|
-| `screenshot` | Captures the screen, or one app window even when it is covered |
-| `list_windows` | Lists app windows with ids and positions |
-| `mouse_move`, `click`, `drag`, `scroll` | Human-like mouse actions |
-| `type_text`, `key` | Typing and key combinations (`cmd+c`) |
+| `screenshot` | A low-detail look at the screen or one app window (even when covered), or a sharp zoom of part of an earlier shot, optionally with a crosshair where a click would land |
+| `act` | Up to 20 planned actions in one call (move, click, type, key, scroll, drag, wait), then a new low-detail look once the screen settles |
+| `list_windows` | App windows with ids and positions |
+| `mouse_move`, `click`, `drag`, `scroll`, `type_text`, `key` | Single actions, with an optional look afterwards |
 | `cursor_position` | Where the cursor is |
 | `doctor` | Checks permissions, display, driver input and Tailscale |
 
-Each position comes back both global (whole desktop) and relative (pixels in the screenshot). The mouse tools accept coordinates straight from a window's screenshot.
+Every image has a shot id, and coordinates are pixels of a named shot. vnkvm maps them to the screen, follows a window that moved, and refuses a window that changed size or a point another window covers. So an agent can look at 1024 px, zoom where it needs detail, and click from either image without mixing them up.
+
+The bundled skill teaches the agent to plan: look once, chain every step it can already see into one `act` call, prefer keyboard shortcuts, and stop the sequence where the next target only appears after the screen changes. One model turn then covers several actions.
 
 ### Watch and control from a browser
 

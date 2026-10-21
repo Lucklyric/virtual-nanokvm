@@ -19,6 +19,8 @@ import "C"
 import (
 	"context"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,28 +43,27 @@ func MainBounds() (width, height float64) {
 	return float64(b.size.width), float64(b.size.height)
 }
 
-// Screenshot captures the main display as a JPEG resized to width pixels.
-// It needs Screen Recording permission for the app that launched this process.
-func Screenshot(ctx context.Context, width int) ([]byte, error) {
+// Capture grabs the main display (window 0) or one window, even when other
+// windows cover it, at full resolution. It needs the Screen Recording
+// permission for the app that launched this process.
+func Capture(ctx context.Context, window uint32) (image.Image, error) {
 	dir, err := os.MkdirTemp("", "vnkvm-shot-")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
 	raw := filepath.Join(dir, "raw.png")
-	out := filepath.Join(dir, "shot.jpg")
-
-	if b, err := exec.CommandContext(ctx, "screencapture", "-x", "-m", "-t", "png", raw).CombinedOutput(); err != nil {
+	args := []string{"-x", "-m", "-t", "png", raw}
+	if window != 0 {
+		args = []string{"-x", "-o", "-l", fmt.Sprint(window), "-t", "png", raw}
+	}
+	if b, err := exec.CommandContext(ctx, "screencapture", args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("screencapture: %v: %s", err, b)
 	}
-	if _, err := os.Stat(raw); err != nil {
+	f, err := os.Open(raw)
+	if err != nil {
 		return nil, fmt.Errorf("screencapture wrote no image (Screen Recording permission missing?)")
 	}
-	if b, err := exec.CommandContext(ctx, "sips",
-		"--resampleWidth", fmt.Sprint(width),
-		"-s", "format", "jpeg", "-s", "formatOptions", "75",
-		raw, "--out", out).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("sips: %v: %s", err, b)
-	}
-	return os.ReadFile(out)
+	defer f.Close()
+	return png.Decode(f)
 }

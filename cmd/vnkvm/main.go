@@ -34,6 +34,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"image"
 	"log"
 	"net"
 	"net/http"
@@ -58,18 +59,16 @@ const defaultSocket = "/var/run/vnkvm-hid.sock"
 
 type mainScreen struct{}
 
-func (mainScreen) Screenshot(ctx context.Context, width int) ([]byte, error) {
-	return screen.Screenshot(ctx, width)
-}
 func (mainScreen) Bounds() (float64, float64) { return screen.MainBounds() }
 func (mainScreen) Windows() []screen.Window   { return screen.Windows() }
 func (mainScreen) FindWindow(id uint32, app string) (screen.Window, error) {
 	return screen.FindWindow(id, app)
 }
 func (mainScreen) WindowAt(x, y float64) (screen.Window, bool) { return screen.WindowAt(x, y) }
-func (mainScreen) WindowShot(ctx context.Context, id uint32, width int) ([]byte, error) {
-	return screen.WindowShot(ctx, id, width)
+func (mainScreen) Capture(ctx context.Context, window uint32) (image.Image, error) {
+	return screen.Capture(ctx, window)
 }
+func (mainScreen) Preview(width int) ([]byte, error) { return screen.Frame(width, 0.5) }
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: vnkvm mcp|move X Y|click X Y|type TEXT|serve|doctor [--input driver|sys] [--bridge-socket PATH] [--dry-run]")

@@ -51,11 +51,7 @@ static int vnkvm_windows(vnkvm_window *out, int max) {
 import "C"
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 )
 
@@ -117,29 +113,4 @@ func WindowAt(x, y float64) (Window, bool) {
 		}
 	}
 	return Window{}, false
-}
-
-// WindowShot captures one window, even when other windows cover it, as a JPEG
-// resized to width pixels.
-func WindowShot(ctx context.Context, id uint32, width int) ([]byte, error) {
-	dir, err := os.MkdirTemp("", "vnkvm-win-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-	raw := filepath.Join(dir, "raw.png")
-	out := filepath.Join(dir, "shot.jpg")
-	if b, err := exec.CommandContext(ctx, "screencapture", "-x", "-o", "-l", fmt.Sprint(id), "-t", "png", raw).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("screencapture: %v: %s", err, b)
-	}
-	if _, err := os.Stat(raw); err != nil {
-		return nil, fmt.Errorf("screencapture wrote no image (Screen Recording permission missing?)")
-	}
-	if b, err := exec.CommandContext(ctx, "sips",
-		"--resampleWidth", fmt.Sprint(width),
-		"-s", "format", "jpeg", "-s", "formatOptions", "75",
-		raw, "--out", out).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("sips: %v: %s", err, b)
-	}
-	return os.ReadFile(out)
 }

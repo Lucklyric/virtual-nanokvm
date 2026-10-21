@@ -1,19 +1,16 @@
 // Package mcpserver exposes the virtual keyboard, mouse and screen as MCP tools.
 //
-// Coordinates come in two spaces:
-//   - global: display points, shared by every screen and window (what the
-//     mouse moves in)
-//   - relative: pixels of the screenshot of a frame, which is either the main
-//     display or one app window (window_id / app)
-//
-// global = frame origin + relative × scale. Tools take relative coordinates for
-// the frame they name, so an agent can click straight from a screenshot.
+// Every screenshot gets a shot id. Coordinates an agent sends are pixels of a
+// named shot, so a quick low-detail look and a sharp zoom of one corner never
+// get mixed up. The server maps them to global display points (the space the
+// mouse moves in), following a window that moved since the shot was taken.
 package mcpserver
 
 import (
 	"context"
 	"fmt"
-	"math"
+	"image"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -24,58 +21,14 @@ import (
 
 // Screen is what the server needs from the display.
 type Screen interface {
-	Screenshot(ctx context.Context, width int) ([]byte, error)
 	Bounds() (width, height float64) // main display, in points
 	Windows() []screen.Window
 	FindWindow(id uint32, app string) (screen.Window, error)
 	WindowAt(x, y float64) (screen.Window, bool)
-	WindowShot(ctx context.Context, id uint32, width int) ([]byte, error)
-}
-
-// maxShotWidth caps screenshot width so images stay small enough for a model.
-const maxShotWidth = 1568
-
-// frame is the area a screenshot covers, in global points.
-type frame struct {
-	x, y, w, h float64
-	window     *screen.Window
-}
-
-func (f frame) scale() float64 { return f.w / math.Min(f.w, maxShotWidth) }
-
-func (f frame) imageSize() (float64, float64) {
-	return math.Round(f.w / f.scale()), math.Round(f.h / f.scale())
-}
-
-func (f frame) name() string {
-	if f.window == nil {
-		return "main display screenshot"
-	}
-	return fmt.Sprintf("window %d screenshot", f.window.ID)
-}
-
-// toGlobal converts screenshot pixels of this frame to a global point.
-func (f frame) toGlobal(x, y float64) (human.Point, error) {
-	w, h := f.imageSize()
-	if x < 0 || y < 0 || x >= w || y >= h {
-		return human.Point{}, fmt.Errorf("(%.0f, %.0f) is outside the %.0fx%.0f %s", x, y, w, h, f.name())
-	}
-	k := f.scale()
-	return human.Point{X: f.x + x*k, Y: f.y + y*k}, nil
-}
-
-// locate describes a global point in both spaces.
-func (f frame) locate(p human.Point) location {
-	loc := location{Global: position{math.Round(p.X), math.Round(p.Y)}}
-	if f.window != nil {
-		loc.WindowID = f.window.ID
-	}
-	k := f.scale()
-	rx, ry := (p.X-f.x)/k, (p.Y-f.y)/k
-	if w, h := f.imageSize(); rx >= 0 && ry >= 0 && rx < w && ry < h {
-		loc.Relative = &position{math.Round(rx), math.Round(ry)}
-	}
-	return loc
+	// Capture grabs the main display (window 0) or one window at full resolution.
+	Capture(ctx context.Context, window uint32) (image.Image, error)
+	// Preview is a fast small JPEG of the main display, to see whether it moved.
+	Preview(width int) ([]byte, error)
 }
 
 type position struct {
@@ -83,69 +36,129 @@ type position struct {
 	Y float64 `json:"y"`
 }
 
-type location struct {
-	Global   position  `json:"global" jsonschema:"display points, valid across all screens and windows"`
-	Relative *position `json:"relative,omitempty" jsonschema:"pixels in the screenshot of the frame used (main display, or window_id); omitted when the point is outside it"`
-	WindowID uint32    `json:"window_id,omitempty" jsonschema:"the window the relative coordinates belong to"`
+type shotInfo struct {
+	Shot        int        `json:"shot" jsonschema:"id to pass with coordinates read from this image"`
+	Frame       string     `json:"frame" jsonschema:"main_display or window"`
+	WindowID    uint32     `json:"window_id,omitempty"`
+	App         string     `json:"app,omitempty"`
+	ImageWidth  int        `json:"image_width"`
+	ImageHeight int        `json:"image_height"`
+	Region      [4]float64 `json:"region" jsonschema:"x, y, width, height of the frame this image covers, in points"`
+	Origin      position   `json:"origin" jsonschema:"global point of the image's top-left corner"`
+	Scale       float64    `json:"scale" jsonschema:"points per image pixel"`
+	Cursor      *position  `json:"cursor,omitempty" jsonschema:"cursor in this image's pixels; omitted when outside it"`
 }
 
-// target picks the frame: one app window, or the main display.
-type target struct {
-	WindowID uint32 `json:"window_id,omitempty" jsonschema:"use this window's screenshot coordinates (see list_windows)"`
-	App      string `json:"app,omitempty" jsonschema:"use the frontmost window of this app (name substring), e.g. Safari"`
+func info(scr Screen, e *human.Engine, sh *shot) shotInfo {
+	in := shotInfo{
+		Shot: sh.ID, Frame: "main_display", WindowID: sh.Window, App: sh.App,
+		ImageWidth: sh.W, ImageHeight: sh.H, Region: [4]float64{sh.QX, sh.QY, sh.QW, sh.QH},
+		Origin: position{sh.FX + sh.QX, sh.FY + sh.QY}, Scale: sh.Scale,
+	}
+	if sh.Window != 0 {
+		in.Frame = "window"
+	}
+	if p, err := e.Cursor.Position(); err == nil {
+		if px, ok := pixelOf(sh, p); ok {
+			in.Cursor = &px
+		}
+	}
+	return in
+}
+
+func (in shotInfo) note() string {
+	what := "main display"
+	if in.Frame == "window" {
+		what = fmt.Sprintf("window %d (%s)", in.WindowID, in.App)
+	}
+	s := fmt.Sprintf("shot %d: %s, %dx%d px, %.2f points per px", in.Shot, what, in.ImageWidth, in.ImageHeight, in.Scale)
+	if in.Region[0] > 0 || in.Region[1] > 0 {
+		s += fmt.Sprintf(", zoom of region (%.0f, %.0f, %.0f×%.0f pt)", in.Region[0], in.Region[1], in.Region[2], in.Region[3])
+	}
+	if in.Cursor != nil {
+		s += fmt.Sprintf("; cursor at (%.0f, %.0f)", in.Cursor.X, in.Cursor.Y)
+	} else {
+		s += "; cursor outside this image"
+	}
+	return s + fmt.Sprintf(". Use shot %d with coordinates from this image.", in.Shot)
 }
 
 type shotArgs struct {
-	target
+	WindowID uint32    `json:"window_id,omitempty" jsonschema:"capture this window, even when covered (see list_windows)"`
+	App      string    `json:"app,omitempty" jsonschema:"capture the frontmost window of this app (name substring), e.g. Safari"`
+	Shot     int       `json:"shot,omitempty" jsonschema:"zoom into this earlier shot: region and mark are in its pixels"`
+	Region   []float64 `json:"region,omitempty" jsonschema:"x, y, width, height in the pixels of shot, to capture sharper"`
+	Mark     *position `json:"mark,omitempty" jsonschema:"draw a crosshair at this pixel of shot, to check aim before clicking; without region, zooms around it"`
+	Width    int       `json:"width,omitempty" jsonschema:"image width in pixels: default 1024 for a whole frame (low detail), 1568 for a zoom; max 1568"`
 }
 
-type shotInfo struct {
-	Frame       string   `json:"frame" jsonschema:"main_display or window"`
-	WindowID    uint32   `json:"window_id,omitempty"`
-	App         string   `json:"app,omitempty"`
-	Title       string   `json:"title,omitempty"`
-	Origin      position `json:"origin" jsonschema:"global point of the image's top-left pixel"`
-	Width       float64  `json:"width" jsonschema:"frame width in global points"`
-	Height      float64  `json:"height" jsonschema:"frame height in global points"`
-	ImageWidth  float64  `json:"image_width"`
-	ImageHeight float64  `json:"image_height"`
-	Scale       float64  `json:"scale" jsonschema:"global points per image pixel: global = origin + pixel * scale"`
-	Cursor      location `json:"cursor"`
+type cursorArgs struct {
+	Shot int `json:"shot,omitempty" jsonschema:"also give the position in this shot's pixels (default: the latest shot)"`
+}
+
+type cursorInfo struct {
+	Global position  `json:"global" jsonschema:"display points"`
+	Shot   int       `json:"shot,omitempty"`
+	Pixel  *position `json:"pixel,omitempty" jsonschema:"in that shot's pixels; omitted when outside it"`
+}
+
+type observeArg struct {
+	Observe bool `json:"observe,omitempty" jsonschema:"after acting, wait for the screen to settle and return a new low-detail shot of the same window or display"`
 }
 
 type moveArgs struct {
-	target
-	X    float64 `json:"x" jsonschema:"target x in the frame's screenshot pixels"`
-	Y    float64 `json:"y" jsonschema:"target y in the frame's screenshot pixels"`
-	Size float64 `json:"size,omitempty" jsonschema:"approximate size of the target in screenshot pixels (default 20); smaller targets get a slower, more careful approach"`
+	Shot int     `json:"shot" jsonschema:"shot the coordinates come from"`
+	X    float64 `json:"x" jsonschema:"pixel x in that shot"`
+	Y    float64 `json:"y" jsonschema:"pixel y in that shot"`
+	Size float64 `json:"size,omitempty" jsonschema:"rough target size in that shot's pixels; small targets get a slower, careful approach"`
+	observeArg
 }
 
 type clickArgs struct {
-	target
-	X      *float64 `json:"x,omitempty" jsonschema:"move here first (frame screenshot pixels); omit to click in place"`
-	Y      *float64 `json:"y,omitempty" jsonschema:"move here first (frame screenshot pixels); omit to click in place"`
-	Button string   `json:"button,omitempty" jsonschema:"left (default), right or middle"`
+	Shot   int      `json:"shot,omitempty" jsonschema:"shot the coordinates come from; needed with x, y"`
+	X      *float64 `json:"x,omitempty" jsonschema:"move here first (pixel x in that shot); omit to click in place"`
+	Y      *float64 `json:"y,omitempty" jsonschema:"move here first (pixel y in that shot)"`
+	Size   float64  `json:"size,omitempty" jsonschema:"rough target size in that shot's pixels"`
+	Button string   `json:"button,omitempty" jsonschema:"left (default) or right"`
 	Count  int      `json:"count,omitempty" jsonschema:"1 for a click (default), 2 for a double click"`
+	observeArg
 }
 
 type dragArgs struct {
-	target
-	X float64 `json:"x" jsonschema:"drop x in the frame's screenshot pixels"`
-	Y float64 `json:"y" jsonschema:"drop y in the frame's screenshot pixels"`
+	Shot int     `json:"shot" jsonschema:"shot the coordinates come from"`
+	X    float64 `json:"x" jsonschema:"drop pixel x in that shot"`
+	Y    float64 `json:"y" jsonschema:"drop pixel y in that shot"`
+	observeArg
 }
 
 type scrollArgs struct {
 	DY int `json:"dy,omitempty" jsonschema:"wheel notches; positive scrolls down"`
 	DX int `json:"dx,omitempty" jsonschema:"wheel notches; positive scrolls right"`
+	observeArg
 }
 
 type typeArgs struct {
 	Text string  `json:"text" jsonschema:"text to type (US keyboard characters only)"`
 	WPM  float64 `json:"wpm,omitempty" jsonschema:"typing speed in words per minute (default 70)"`
+	observeArg
 }
 
 type keyArgs struct {
 	Keys string `json:"keys" jsonschema:"key or combination, e.g. enter, cmd+c, cmd+shift+4, ctrl+left"`
+	observeArg
+}
+
+type actArgs struct {
+	Shot    int    `json:"shot,omitempty" jsonschema:"default shot for the steps' coordinates"`
+	Steps   []step `json:"steps" jsonschema:"actions in order; the sequence stops at the first failure"`
+	Observe *bool  `json:"observe,omitempty" jsonschema:"return a new low-detail shot after the steps (default true)"`
+	Width   int    `json:"width,omitempty" jsonschema:"width of that shot (default 1024)"`
+}
+
+type actReport struct {
+	Steps []string  `json:"steps" jsonschema:"what each step did, in order"`
+	Error string    `json:"error,omitempty"`
+	Shot  *shotInfo `json:"shot,omitempty" jsonschema:"the observation shot"`
 }
 
 type windowList struct {
@@ -165,42 +178,53 @@ type doctorReport struct {
 // New builds the MCP server. bridgeSocket is where doctor looks for the
 // driver input bridge.
 func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.1.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.2.0"}, nil)
+	reg := &shots{}
 
-	frameFor := func(t target) (frame, error) {
-		if t.WindowID == 0 && t.App == "" {
-			w, h := scr.Bounds()
-			return frame{w: w, h: h}, nil
+	// do runs steps, then optionally looks again. Every action tool uses it.
+	do := func(ctx context.Context, steps []step, defShot int, observe bool, width int) (*mcp.CallToolResult, actReport, error) {
+		r := &runner{e: e, scr: scr, reg: reg}
+		if err := r.validate(steps, defShot); err != nil {
+			return nil, actReport{}, err
 		}
-		win, err := scr.FindWindow(t.WindowID, t.App)
-		if err != nil {
-			return frame{}, err
+		lines, runErr := r.run(ctx, steps)
+		rep := actReport{Steps: lines}
+		res := &mcp.CallToolResult{}
+		text := strings.Join(lines, "\n")
+		if runErr != nil {
+			rep.Error = runErr.Error()
+			res.IsError = true
+			text += "\n" + runErr.Error()
+			if tookControl(runErr) {
+				text += "\nThe person moved the mouse. Everything is released. Stop and ask before continuing."
+			}
 		}
-		return frame{x: win.X, y: win.Y, w: win.Width, h: win.Height, window: &win}, nil
-	}
-
-	// aim converts frame pixels to a global point. For a window it re-reads
-	// the window's current bounds (it may have moved since the screenshot) and
-	// refuses points another window covers, since the click would land there.
-	aim := func(t target, x, y float64) (frame, human.Point, error) {
-		f, err := frameFor(t)
-		if err != nil {
-			return f, human.Point{}, err
+		if observe && ctx.Err() == nil {
+			req := shotRequest{Width: width}
+			base := r.last
+			if base == nil {
+				base = reg.latest()
+			}
+			if base != nil && base.Window != 0 {
+				if _, err := scr.FindWindow(base.Window, ""); err == nil {
+					req.Window = base.Window
+				}
+			}
+			settled := ""
+			if steps[len(steps)-1].Do != "wait_for" {
+				settled = r.settle(ctx, settleTimeout)
+			}
+			if sh, img, err := take(ctx, scr, reg, req); err == nil {
+				in := info(scr, e, sh)
+				rep.Shot = &in
+				res.Content = append(res.Content, &mcp.ImageContent{Data: img, MIMEType: "image/jpeg"})
+				text += "\nobserved" + settled + ": " + in.note()
+			} else {
+				text += "\nobservation failed: " + err.Error()
+			}
 		}
-		p, err := f.toGlobal(x, y)
-		if err != nil || f.window == nil {
-			return f, p, err
-		}
-		if top, ok := scr.WindowAt(p.X, p.Y); ok && top.ID != f.window.ID {
-			return f, p, fmt.Errorf("window %d (%s) is covered at that point by %s (window %d); bring it to the front first",
-				f.window.ID, f.window.App, top.App, top.ID)
-		}
-		return f, p, nil
-	}
-
-	cursor := func(f frame) (location, error) {
-		p, err := e.Cursor.Position()
-		return f.locate(p), err
+		res.Content = append(res.Content, &mcp.TextContent{Text: text})
+		return res, rep, nil
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -220,153 +244,132 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "screenshot",
-		Description: "Capture the main display, or one app window (window_id or app) even when other windows cover it. " +
-			"Returns the image plus its origin and scale, so global = origin + pixel × scale. " +
-			"Pass the same window_id or app to the mouse tools to use this image's pixels directly.",
+		Description: "Look at the screen. Start low: a whole window (app or window_id) or the display at the default 1024 px. " +
+			"Zoom only when a target is small, text is unreadable or two targets are close: pass shot plus region (in that shot's pixels) " +
+			"for a sharp crop, or shot plus mark to see exactly where a click would land. " +
+			"Each image has a shot id; pass it with any coordinates you read from that image.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in shotArgs) (*mcp.CallToolResult, shotInfo, error) {
-		f, err := frameFor(in.target)
+		req := shotRequest{Width: in.Width, Mark: in.Mark}
+		switch {
+		case in.Shot != 0:
+			b, err := reg.get(in.Shot)
+			if err != nil {
+				return nil, shotInfo{}, err
+			}
+			if in.WindowID != 0 || in.App != "" {
+				return nil, shotInfo{}, fmt.Errorf("a zoom stays in shot %d's frame; leave out window_id and app", in.Shot)
+			}
+			if len(in.Region) != 0 && len(in.Region) != 4 {
+				return nil, shotInfo{}, fmt.Errorf("region is [x, y, width, height]")
+			}
+			req.Base = b
+			copy(req.Region[:], in.Region)
+		case len(in.Region) != 0 || in.Mark != nil:
+			return nil, shotInfo{}, fmt.Errorf("region and mark need shot: the id of the image they refer to")
+		case in.WindowID != 0 || in.App != "":
+			w, err := scr.FindWindow(in.WindowID, in.App)
+			if err != nil {
+				return nil, shotInfo{}, err
+			}
+			req.Window = w.ID
+		}
+		sh, img, err := take(ctx, scr, reg, req)
 		if err != nil {
 			return nil, shotInfo{}, err
 		}
-		iw, ih := f.imageSize()
-		var img []byte
-		if f.window == nil {
-			img, err = scr.Screenshot(ctx, int(iw))
-		} else {
-			img, err = scr.WindowShot(ctx, f.window.ID, int(iw))
-		}
-		if err != nil {
-			return nil, shotInfo{}, err
-		}
-		c, err := cursor(f)
-		if err != nil {
-			return nil, shotInfo{}, err
-		}
-		info := shotInfo{
-			Frame: "main_display", Origin: position{f.x, f.y}, Width: f.w, Height: f.h,
-			ImageWidth: iw, ImageHeight: ih, Scale: f.scale(), Cursor: c,
-		}
-		label := "main display"
-		if f.window != nil {
-			info.Frame, info.WindowID, info.App, info.Title = "window", f.window.ID, f.window.App, f.window.Title
-			label = fmt.Sprintf("window %d %q (%s)", f.window.ID, f.window.Title, f.window.App)
-		}
-		note := fmt.Sprintf("%s: image %.0fx%.0f, origin (%.0f, %.0f) global, scale %.3f; cursor global (%.0f, %.0f)",
-			label, iw, ih, f.x, f.y, f.scale(), c.Global.X, c.Global.Y)
-		if c.Relative != nil {
-			note += fmt.Sprintf(", relative (%.0f, %.0f)", c.Relative.X, c.Relative.Y)
-		} else {
-			note += ", outside this image"
-		}
+		out := info(scr, e, sh)
 		return &mcp.CallToolResult{Content: []mcp.Content{
 			&mcp.ImageContent{Data: img, MIMEType: "image/jpeg"},
-			&mcp.TextContent{Text: note},
-		}}, info, nil
+			&mcp.TextContent{Text: out.note()},
+		}}, out, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "act",
+		Description: "Run a planned sequence of up to 20 actions in one call, then return a new low-detail shot. " +
+			"Plan from one shot: chain every step whose target you can already see (click a field, type, press a key), " +
+			"and end the sequence where the next target only appears after the screen changes. " +
+			"Use wait_for (change or stable) after steps that open, load or animate something. " +
+			"The sequence stops at the first failure, or when the person moves the mouse.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in actArgs) (*mcp.CallToolResult, actReport, error) {
+		observe := in.Observe == nil || *in.Observe
+		return do(ctx, in.Steps, in.Shot, observe, in.Width)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "cursor_position",
-		Description: "Return the cursor position, global and relative to the main display or a window.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in shotArgs) (*mcp.CallToolResult, location, error) {
-		f, err := frameFor(in.target)
+		Description: "Return the cursor position in global points and in a shot's pixels.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in cursorArgs) (*mcp.CallToolResult, cursorInfo, error) {
+		p, err := e.Cursor.Position()
 		if err != nil {
-			return nil, location{}, err
+			return nil, cursorInfo{}, err
 		}
-		c, err := cursor(f)
-		return nil, c, err
+		out := cursorInfo{Global: position{p.X, p.Y}}
+		sh := reg.latest()
+		if in.Shot != 0 {
+			if sh, err = reg.get(in.Shot); err != nil {
+				return nil, cursorInfo{}, err
+			}
+		}
+		if sh != nil {
+			out.Shot = sh.ID
+			if px, ok := pixelOf(sh, p); ok {
+				out.Pixel = &px
+			}
+		}
+		return nil, out, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "mouse_move",
-		Description: "Move the mouse to a point along a human-like path (curved, accelerating then slowing, with a small overshoot on long moves).",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in moveArgs) (*mcp.CallToolResult, location, error) {
-		f, p, err := aim(in.target, in.X, in.Y)
-		if err != nil {
-			return nil, location{}, err
-		}
-		got, err := e.MoveTo(ctx, p, in.Size*f.scale())
-		return nil, f.locate(got), err
+		Description: "Move the mouse to a pixel of a shot along a human-like path.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in moveArgs) (*mcp.CallToolResult, actReport, error) {
+		return do(ctx, []step{{Do: "move", X: &in.X, Y: &in.Y, Size: in.Size}}, in.Shot, in.Observe, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "click",
-		Description: "Click a mouse button, optionally moving to (x, y) first with a human-like path.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in clickArgs) (*mcp.CallToolResult, location, error) {
-		b, err := button(in.Button)
-		if err != nil {
-			return nil, location{}, err
+		Description: "Click, optionally moving first to a pixel of a shot. For several actions in a row, use act.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in clickArgs) (*mcp.CallToolResult, actReport, error) {
+		st := step{Do: "click", X: in.X, Y: in.Y, Size: in.Size}
+		switch {
+		case in.Button == "right":
+			st.Do = "right_click"
+		case in.Button != "" && in.Button != "left":
+			return nil, actReport{}, fmt.Errorf("button is left or right")
+		case in.Count == 2:
+			st.Do = "double_click"
 		}
-		if (in.X == nil) != (in.Y == nil) {
-			return nil, location{}, fmt.Errorf("give both x and y, or neither")
-		}
-		f, err := frameFor(in.target)
-		if err != nil {
-			return nil, location{}, err
-		}
-		if in.X != nil {
-			var p human.Point
-			if f, p, err = aim(in.target, *in.X, *in.Y); err != nil {
-				return nil, location{}, err
-			}
-			if _, err := e.MoveTo(ctx, p, 0); err != nil {
-				return nil, location{}, err
-			}
-		}
-		count := in.Count
-		if count <= 0 {
-			count = 1
-		}
-		if err := e.Click(ctx, b, count); err != nil {
-			return nil, location{}, err
-		}
-		c, err := cursor(f)
-		return nil, c, err
+		return do(ctx, []step{st}, in.Shot, in.Observe, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "drag",
-		Description: "Hold the left button at the current position, move to (x, y) and release.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in dragArgs) (*mcp.CallToolResult, location, error) {
-		f, p, err := aim(in.target, in.X, in.Y)
-		if err != nil {
-			return nil, location{}, err
-		}
-		got, err := e.Drag(ctx, human.Left, p)
-		return nil, f.locate(got), err
+		Description: "Hold the left button at the current position, move to a pixel of a shot and release. Move to the start first.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in dragArgs) (*mcp.CallToolResult, actReport, error) {
+		return do(ctx, []step{{Do: "drag", X: &in.X, Y: &in.Y}}, in.Shot, in.Observe, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "scroll",
 		Description: "Turn the scroll wheel at the current cursor position.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in scrollArgs) (*mcp.CallToolResult, empty, error) {
-		return nil, empty{}, e.Scroll(ctx, in.DX, in.DY)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in scrollArgs) (*mcp.CallToolResult, actReport, error) {
+		return do(ctx, []step{{Do: "scroll", DX: in.DX, DY: in.DY}}, 0, in.Observe, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "type_text",
-		Description: "Type text on the virtual keyboard with human rhythm.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in typeArgs) (*mcp.CallToolResult, empty, error) {
-		return nil, empty{}, e.Type(ctx, in.Text, in.WPM)
+		Description: "Type text with human rhythm into the focused field.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in typeArgs) (*mcp.CallToolResult, actReport, error) {
+		return do(ctx, []step{{Do: "type", Text: in.Text, WPM: in.WPM}}, 0, in.Observe, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "key",
 		Description: "Press a key or key combination such as enter, escape, cmd+c, cmd+shift+4.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in keyArgs) (*mcp.CallToolResult, empty, error) {
-		return nil, empty{}, e.Press(ctx, in.Keys)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in keyArgs) (*mcp.CallToolResult, actReport, error) {
+		return do(ctx, []step{{Do: "key", Keys: in.Keys}}, 0, in.Observe, 0)
 	})
 
 	return s
-}
-
-func button(name string) (human.Button, error) {
-	switch name {
-	case "", "left":
-		return human.Left, nil
-	case "right":
-		return human.Right, nil
-	case "middle":
-		return human.Middle, nil
-	}
-	return 0, fmt.Errorf("unknown button %q", name)
 }

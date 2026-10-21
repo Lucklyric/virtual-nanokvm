@@ -16,17 +16,17 @@ import (
 
 func TestLessonsAddDedupeAndCap(t *testing.T) {
 	t.Setenv("VNKVM_LESSONS_DIR", t.TempDir())
-	if _, err := addLesson("Safari", "Use cmd+l to reach the address bar"); err != nil {
+	if _, _, err := addLesson("Safari", "Use cmd+l to reach the address bar"); err != nil {
 		t.Fatal(err)
 	}
-	lines, _ := addLesson("safari", "use cmd+L to reach the address bar") // same app, same lesson
-	if len(lines) != 1 {
-		t.Fatalf("duplicate kept: %v", lines)
+	lines, v, _ := addLesson("safari", "use cmd+L to reach the address bar") // same app, same lesson
+	if len(lines) != 1 || v != 1 || !strings.HasPrefix(lines[0], "v1 ") {
+		t.Fatalf("duplicate kept or untagged: v%d %v", v, lines)
 	}
 	for i := 0; i < maxLessons+5; i++ {
 		addLesson("Safari", fmt.Sprintf("lesson %d", i))
 	}
-	lines, _ = readLessons("Safari")
+	lines, _, _ = readLessons("Safari")
 	if len(lines) != maxLessons || !strings.HasSuffix(lines[len(lines)-1], fmt.Sprintf("lesson %d", maxLessons+4)) {
 		t.Fatalf("kept %d lessons, last %q", len(lines), lines[len(lines)-1])
 	}
@@ -166,5 +166,129 @@ func TestBackgroundModeStaysInTheApp(t *testing.T) {
 	}
 	if res := callTool(t, cs, "act", map[string]any{"mode": "sideways", "steps": []map[string]any{{"do": "key", "keys": "a"}}}); !res.IsError {
 		t.Error("unknown mode accepted")
+	}
+}
+
+func TestSetKeepsTagsAndBumpsVersion(t *testing.T) {
+	t.Setenv("VNKVM_LESSONS_DIR", t.TempDir())
+	addLesson("Notes", "first")
+	lines, _, _ := addLesson("Notes", "second")
+	lines, v, err := setLessons("Notes", []string{lines[0], "merged rule"})
+	if err != nil || v != 3 || !strings.HasPrefix(lines[0], "v1 ") || !strings.HasPrefix(lines[1], "v3 ") {
+		t.Fatalf("set: v%d %v %v", v, lines, err)
+	}
+	if _, v, _ := readLessons("Notes"); v != 3 {
+		t.Fatalf("version read back as %d", v)
+	}
+}
+
+func TestDoneRecordsTasksAndAsksForReview(t *testing.T) {
+	t.Setenv("VNKVM_LESSONS_DIR", t.TempDir())
+	scr := &fakeScreen{windows: []screen.Window{{ID: 7, PID: 42, App: "Notes", X: 100, Y: 80, Width: 800, Height: 600}}}
+	cs := connect(t, scr, Options{})
+	callTool(t, cs, "lessons", map[string]any{"app": "Notes", "add": "use cmd+f"})
+
+	var last *mcp.CallToolResult
+	for i := 0; i < 5; i++ {
+		callTool(t, cs, "screenshot", map[string]any{"app": "Notes"})
+		last = callTool(t, cs, "lessons", map[string]any{"app": "Notes", "done": "find a note"})
+	}
+	out := fmt.Sprint(last.StructuredContent)
+	// Each task: one screenshot plus the lessons call itself.
+	if !strings.Contains(out, "tool_calls:2") || !strings.Contains(out, "lessons_version:1") {
+		t.Fatalf("task record: %s", out)
+	}
+	if !strings.Contains(out, "5 tasks since v1") {
+		t.Fatalf("no review after 5 tasks: %s", out)
+	}
+	// A new session still sees the review that fell due.
+	if s := fmt.Sprint(callTool(t, connect(t, scr, Options{}), "lessons", map[string]any{"app": "Notes"}).StructuredContent); !strings.Contains(s, "5 tasks since v1") {
+		t.Fatalf("review lost on read: %s", s)
+	}
+	if all, _ := readTasks(globalApp); len(all) != 5 {
+		t.Fatalf("global rules saw %d tasks", len(all))
+	}
+}
+
+func TestReviewFlagsAWorseVersion(t *testing.T) {
+	var tasks []task
+	for i := 0; i < 3; i++ {
+		tasks = append(tasks, task{Version: 1, Calls: 4}, task{Version: 2, Calls: 9})
+	}
+	if r := review("Notes", 2, tasks); !strings.Contains(r, "v1 took 4.0") {
+		t.Fatalf("regression not flagged: %q", r)
+	}
+	if r := review("Notes", 2, tasks[:4]); r != "" {
+		t.Fatalf("flagged on too few tasks: %q", r)
+	}
+}
+
+func TestRecipeFollowsTheWindowAndFillsText(t *testing.T) {
+	t.Setenv("VNKVM_LESSONS_DIR", t.TempDir())
+	scr := &fakeScreen{windows: []screen.Window{{ID: 7, PID: 42, App: "Notes", X: 100, Y: 80, Width: 800, Height: 600}}}
+	bg := &fakeBackground{}
+	cs := connect(t, scr, Options{Background: bg})
+	callTool(t, cs, "screenshot", map[string]any{"app": "Notes"})
+
+	steps := []map[string]any{
+		{"do": "click", "x": 512, "y": 384},
+		{"do": "type", "text": "secret groceries"},
+		{"do": "key", "keys": "enter"},
+	}
+	res := callTool(t, cs, "recipes", map[string]any{"save": "find_note", "when": "Notes window, list visible", "shot": 1, "steps": steps})
+	if res.IsError {
+		t.Fatalf("save: %s", text(res))
+	}
+	if s := fmt.Sprint(res.StructuredContent); strings.Contains(s, "secret") || !strings.Contains(s, "text2") {
+		t.Fatalf("typed text was stored: %s", s)
+	}
+
+	scr.windows[0].X, scr.windows[0].Y = 300, 200 // the window moved
+	shot := callTool(t, cs, "screenshot", map[string]any{"app": "Notes"})
+	if !strings.Contains(text(shot), "find_note(text2): Notes window") {
+		t.Fatalf("screenshot does not list the recipe: %s", text(shot))
+	}
+	res = callTool(t, cs, "act", map[string]any{"shot": 2, "mode": "background", "observe": false, "recipe": "find_note"})
+	if !res.IsError || !strings.Contains(text(res), "needs args: text2") {
+		t.Fatalf("missing args accepted: %s", text(res))
+	}
+	res = callTool(t, cs, "act", map[string]any{"shot": 2, "mode": "background", "observe": false, "recipe": "find_note", "args": map[string]any{"text2": "x"}})
+	if res.IsError {
+		t.Fatalf("recipe run: %s", text(res))
+	}
+	if len(bg.calls) != 1 || bg.calls[0] != "act 42 700 500 false" {
+		t.Fatalf("recipe click did not follow the window: %v", bg.calls)
+	}
+	if rs, _ := readRecipes("Notes"); rs[0].Runs != 1 {
+		t.Fatalf("run not counted: %+v", rs[0])
+	}
+
+	scr.windows[0].Width = 900 // resized: positions moved
+	callTool(t, cs, "screenshot", map[string]any{"app": "Notes"})
+	if res := callTool(t, cs, "act", map[string]any{"shot": 3, "mode": "background", "recipe": "find_note", "args": map[string]any{"text2": "x"}}); !res.IsError {
+		t.Fatal("recipe ran on a resized window")
+	}
+}
+
+func TestExpectMissStopsTheSequence(t *testing.T) {
+	scr := &fakeScreen{windows: []screen.Window{{ID: 7, PID: 42, App: "Notes", X: 100, Y: 80, Width: 800, Height: 600}}}
+	bg := &fakeBackground{}
+	cs := connect(t, scr, Options{Background: bg})
+	callTool(t, cs, "screenshot", map[string]any{"app": "Notes"})
+	// The fake window never changes, so the predicted change does not come.
+	res := callTool(t, cs, "act", map[string]any{"shot": 1, "mode": "background", "observe": false, "steps": []map[string]any{
+		{"do": "click", "x": 10, "y": 10},
+		{"do": "expect", "until": "change", "region": []float64{0, 0, 100, 50}, "ms": 300},
+		{"do": "click", "x": 20, "y": 20},
+	}})
+	if !res.IsError || !strings.Contains(text(res), "prediction missed") || len(bg.calls) != 1 {
+		t.Fatalf("expect did not stop the sequence: %s %v", text(res), bg.calls)
+	}
+	if res := callTool(t, cs, "act", map[string]any{"shot": 1, "mode": "background", "steps": []map[string]any{{"do": "expect", "until": "change"}}}); !res.IsError {
+		t.Fatal("expect change accepted with no step before it")
+	}
+	out := callTool(t, cs, "lessons", map[string]any{"app": "Notes"})
+	if s := fmt.Sprint(out.StructuredContent); !strings.Contains(s, "expect_misses:1") {
+		t.Fatalf("miss not counted: %s", s)
 	}
 }

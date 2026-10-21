@@ -24,12 +24,13 @@ If a tool fails, or on first use, call `doctor` (with `fix: true` to raise the m
 
 ## The loop
 
-0. **Read the lessons.** Call `lessons` with the app name. Apply what earlier tasks learned there before planning.
-1. **Look low, at one app.** `screenshot` with `app` (or `window_id` from `list_windows`) at the default 1024 px. Screenshots cover one app's window only; whole-display capture is off unless the person turned it on. Look only at the app the task needs.
-2. **Plan a sequence.** Before acting, write down the steps and what the screen should look like after each one. Put in one `act` call every step whose target you can already see, or whose effect you can predict with confidence.
+0. **Read the lessons.** Call `lessons` with the app name, and once per session with `all` (rules for every app). Apply them before planning.
+1. **Look low, at one app.** `screenshot` with `app` (or `window_id` from `list_windows`) at the default 1024 px. Screenshots cover one app's window only; whole-display capture is off unless the person turned it on. Look only at the app the task needs. The result lists the app's saved recipes: if one fits the situation, run it (see Recipes) instead of planning from scratch.
+2. **Plan a sequence, with predictions.** Before acting, write down the steps and what the screen should look like after each one. Put in one `act` call every step whose target you can already see. Where you can predict what a step opens and where the next target will be, chain past it with an `expect` step (see Predict, then chain).
 3. **Zoom only when needed.** If a target is small, its text is hard to read, or two targets sit close together, call `screenshot` with `shot` and `region` around it. To check aim before an important click, call `screenshot` with `shot` and `mark` at the planned pixel: the crosshair shows where it will land.
 4. **Act.** Send the planned steps to `act`. It returns what each step did and a new low shot after the screen settles.
 5. **Check against the plan.** Compare the new shot with what you predicted. Zoom to read details only when the answer is not visible at low detail. Then plan the next sequence from this shot.
+6. **Close the task.** Save a recipe if the sequence will recur, then call `lessons` with `done` (see Improve with every task).
 
 ## Choosing a mode
 
@@ -72,7 +73,40 @@ Games draw everything themselves, so use foreground mode and plan from pixels. S
 - **End the sequence at uncertainty.** Stop when the next target appears only after something opens, loads or moves: a menu, a dialog, a new page, search results. Add `wait_for` with `until: "change"` or `"stable"` as the last step, so the returned shot shows the result.
 - **Use `wait_for` between dependent steps** inside a sequence when the next step needs the result of the previous one and its position is fixed (for example, a button that appears in a known place).
 - **Give `size`** for small targets (checkboxes, small icons, close buttons) so the approach slows down.
-- **Do not chain clicks on targets you predicted but have not seen.** A wrong guess wastes the steps after it.
+- **Do not chain clicks on targets you predicted but have not seen** unless an `expect` step guards them.
+
+## Predict, then chain
+
+After each step, predict the next screen. When the prediction is confident (a menu you have opened before, a dialog at a known place, a page that always loads the same layout), keep going in the same call and put an `expect` step at the point of change:
+
+- `{"do": "expect", "until": "change", "region": [x, y, w, h]}` waits until that part of the shot changes. `region` is in the shot's pixels; leave it out to watch the whole window.
+- `{"do": "expect", "until": "stable"}` waits until the screen stops moving.
+- If the prediction fails within `ms` (default 3000), the sequence stops there: the steps after it never run on a wrong screen, and the returned shot shows what happened instead.
+
+`wait_for` waits the same way but continues when nothing changes; use it only where the next steps are safe either way. The counters (`expects`, `expect_misses`) show how often your predictions hold. When they mostly hold, chain longer; when they miss, chain shorter in that app and record why.
+
+Example: TextEdit, shot 4 (1024 px wide). Export as PDF: the save sheet is predicted to slide down from the top of the window with the name field focused, so the name and `enter` follow in the same call.
+
+```json
+{"shot": 4, "steps": [
+  {"do": "menu", "menu": "File > Export as PDF…"},
+  {"do": "expect", "until": "change", "region": [0, 0, 1024, 200]},
+  {"do": "wait_for", "until": "stable"},
+  {"do": "key", "keys": "cmd+a"},
+  {"do": "type", "text": "report"},
+  {"do": "key", "keys": "enter"}
+]}
+```
+
+## Recipes
+
+A recipe is a sequence that worked once, saved for the same situation next time: one `act` call instead of several turns.
+
+- **Save** right after an `act` call succeeded, when the sequence will likely recur: `recipes` with `save` (a name), `when` (the situation, in generic words), and the same `shot` and `steps` you sent to `act`. The server says when a sequence looks worth saving.
+- Typed text is not stored. It becomes `{{text1}}`, `{{text2}}` and so on (numbered by step), filled with `args` at run time. Use `keep_text` only for fixed text such as a formula or a command.
+- **Run** with `act`: `recipe`, `args`, and the `shot` of a fresh whole-window screenshot. Extra `steps` run after the recipe. A recipe runs only on a window of the size it was saved at; otherwise act from the shot and save it again.
+- Put an `expect` step in a recipe wherever the screen must change before the next step, so a stale recipe stops instead of clicking blind.
+- A recipe that fails shows "failed N of M runs" in the list. Fix it (save again with the same name) or `delete` it.
 
 Example: search from a Safari window seen in shot 4. Only the keyboard is needed, and the last step waits for the results.
 
@@ -85,16 +119,19 @@ Example: search from a Safari window seen in shot 4. Only the keyboard is needed
 ]}
 ```
 
-## Learn from slow tasks
+## Improve with every task
 
-The server watches the loop and adds an `Efficiency:` hint to a tool result when it looks slow: three looks without an action, three single actions in a row, or the same failure twice. `lessons` also returns the session's counters.
+Lessons are rules that improve with use. The server measures each task, and the lessons are revised against those measurements.
 
-When you see a hint, or a task took clearly more turns than its steps needed, record what you learned with `lessons` and `add`, in one line:
+1. **During a task**, the server adds an `Efficiency:` hint when the loop looks slow: three looks without an action, three single actions in a row, or the same failure twice. When you see one, or a step needed a detour, record a one-line lesson with `add`: what slowed you down and what worked (for example: "The search field needs a click before cmd+f works; then one act call does the whole search."). Rules that hold in every app go to app `all`.
+2. **At the end of every task**, call `lessons` with the app and `done` (a few generic words, such as "export a note as PDF"). The server records what the task cost (tool calls, shots, steps per call, failures, missed predictions, recipe runs) under the current lessons version.
+3. **When the result has `review`**, revise the lessons before the next task. The server asks every fifth task on one version, and when the current version costs clearly more tool calls per task than the previous one. Compare `by_version` and `recent_tasks`:
+   - Each line is tagged with the version that added it (`v3 2026-10-21: ...`). If a version made tasks slower, rewrite or drop its lines.
+   - Keep lines from versions that made tasks faster. Merge duplicates. Turn repeated lessons into a recipe or a rule in `all`.
+   - Save with `set`, keeping the tag of each line you keep unchanged. The version goes up, and the next tasks measure it.
+4. Read the comparison with care: tasks differ. A slower version on harder tasks is not a worse version.
 
-- what slowed you down, and what worked instead (for example: "The search field needs a click before cmd+f works; then one act call does the whole search.");
-- a shortcut, a stable position or a wait that this app needs.
-
-Keep lessons short and general. Merge or drop outdated ones with `set`. Never record passwords, personal text, names, or anything read from the window.
+Keep lessons short and general. Never record passwords, personal text, names, or anything read from the window.
 
 ## When a sequence fails
 

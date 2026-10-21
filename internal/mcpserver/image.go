@@ -114,3 +114,12 @@ func changed(a, b []byte, r [4]float64) (int, error) {
 	}
 	return n, nil
 }
+
+// regionPixels is how many pixels of preview p fall inside r (fractions).
+func regionPixels(p []byte, r [4]float64) int {
+	c, err := jpeg.DecodeConfig(bytes.NewReader(p))
+	if err != nil {
+		return 0
+	}
+	return int(r[2] * float64(c.Width) * r[3] * float64(c.Height))
+}

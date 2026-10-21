@@ -5,6 +5,7 @@
 //	vnkvm click [flags] X Y      move there and left-click
 //	vnkvm type  [flags] TEXT     type text
 //	vnkvm serve [flags]          browser viewer: live stream and remote control
+//	vnkvm doctor [--fix]         check permissions and setup; --fix asks macOS
 //
 // Flags:
 //
@@ -19,6 +20,8 @@
 //	--view-token T        view-only token (random when empty)
 //	--fps N               stream frames per second (default 10)
 //	--width PX            stream width in pixels (default 1280)
+//	--kbps N              H.264 bitrate (default 3000)
+//	--tailscale           share on your tailnet instead of the LAN
 //
 // Only input differs between the two paths: driver is a virtual USB HID
 // device, sys posts synthetic system events the way remote-desktop tools do.
@@ -37,14 +40,17 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Lucklyric/virtual-nanokvm/internal/doctor"
 	"github.com/Lucklyric/virtual-nanokvm/internal/hid"
 	"github.com/Lucklyric/virtual-nanokvm/internal/human"
 	"github.com/Lucklyric/virtual-nanokvm/internal/mcpserver"
 	"github.com/Lucklyric/virtual-nanokvm/internal/screen"
+	"github.com/Lucklyric/virtual-nanokvm/internal/tailnet"
 	"github.com/Lucklyric/virtual-nanokvm/internal/web"
 )
 
@@ -66,7 +72,7 @@ func (mainScreen) WindowShot(ctx context.Context, id uint32, width int) ([]byte,
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: vnkvm mcp|move X Y|click X Y|type TEXT|serve [--input driver|sys] [--bridge-socket PATH] [--dry-run]")
+	fmt.Fprintln(os.Stderr, "usage: vnkvm mcp|move X Y|click X Y|type TEXT|serve|doctor [--input driver|sys] [--bridge-socket PATH] [--dry-run]")
 	os.Exit(2)
 }
 
@@ -84,8 +90,17 @@ func main() {
 	viewToken := fs.String("view-token", "", "serve: view-only token (random when empty)")
 	fps := fs.Int("fps", 10, "serve: stream frames per second")
 	width := fs.Int("width", 1280, "serve: stream width in pixels")
+	kbps := fs.Int("kbps", 3000, "serve: H.264 bitrate in kbit/s")
+	useTailscale := fs.Bool("tailscale", false, "serve: share on your tailnet (HTTPS via tailscale serve when the tailnet has HTTPS certificates)")
+	tsHTTPSPort := fs.Int("tailscale-https-port", 8443, "serve: HTTPS port for tailscale serve")
+	fix := fs.Bool("fix", false, "doctor: ask macOS for missing permissions")
 	fs.Parse(os.Args[2:])
 	args := fs.Args()
+
+	if cmd == "doctor" {
+		fmt.Print(doctor.Format(doctor.Run(context.Background(), *socket, *fix)))
+		return
+	}
 
 	// stdout carries the MCP protocol; logs go to stderr.
 	log.SetOutput(os.Stderr)
@@ -105,7 +120,7 @@ func main() {
 
 	switch cmd {
 	case "mcp":
-		server := mcpserver.New(engine, mainScreen{})
+		server := mcpserver.New(engine, mainScreen{}, *socket)
 		if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
 			log.Print(err)
 		}
@@ -129,16 +144,29 @@ func main() {
 		}
 		fmt.Printf("cursor at (%.0f, %.0f)\n", p.X, p.Y)
 	case "serve":
-		cfg := web.Config{ControlToken: orRandom(*token), ViewToken: orRandom(*viewToken), FPS: *fps, Width: *width}
-		srv := web.New(cfg, engine, streamSource{})
+		cfg := web.Config{ControlToken: orRandom(*token), ViewToken: orRandom(*viewToken), FPS: *fps, Width: *width, Kbps: *kbps}
+		srv := web.New(cfg, engine, streamSource{}, videoSource{})
 		go srv.Run(ctx)
-		hs := &http.Server{Addr: *listen, Handler: srv.Handler()}
+		go srv.RunVideo(ctx)
+
+		addr, base := *listen, "http://"+lanAddr(*listen)
+		if *useTailscale {
+			ts, err := tailnet.Expose(ctx, *listen, *tsHTTPSPort)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer ts.Close()
+			addr, base = ts.Listen, ts.URL
+		}
+		hs := &http.Server{Addr: addr, Handler: srv.Handler()}
 		go func() {
 			<-ctx.Done()
 			hs.Close()
 		}()
-		host := lanAddr(*listen)
-		fmt.Printf("vnkvm viewer (keep these links private):\n  control: http://%s/#token=%s\n  view:    http://%s/#token=%s\n", host, cfg.ControlToken, host, cfg.ViewToken)
+		fmt.Printf("vnkvm viewer (keep these links private):\n  control: %s/#token=%s\n  view:    %s/#token=%s\n", base, cfg.ControlToken, base, cfg.ViewToken)
+		if strings.HasPrefix(base, "http://") {
+			fmt.Println("  H.264 needs HTTPS (or localhost); viewers here get MJPEG.")
+		}
 		if err := hs.ListenAndServe(); err != nil && ctx.Err() == nil {
 			log.Fatal(err)
 		}
@@ -160,6 +188,21 @@ func (streamSource) Frame(width int, quality float64) ([]byte, error) {
 	return screen.Frame(width, quality)
 }
 func (streamSource) Bounds() (float64, float64) { return screen.MainBounds() }
+
+type videoSource struct{}
+
+func (videoSource) EncodeVideo(width, fps, kbps int, pts int64, key bool) error {
+	return screen.H264Encode(width, fps, kbps, pts, key)
+}
+func (videoSource) NextVideo(timeoutMS int) (web.VideoChunk, bool) {
+	c, ok := screen.H264Next(timeoutMS)
+	return web.VideoChunk{Data: c.Data, Key: c.Key, PTS: c.PTS}, ok
+}
+func (videoSource) VideoConfig() (web.VideoConfig, int) {
+	c, seq := screen.H264CurrentConfig()
+	return web.VideoConfig{Codec: c.Codec, Description: c.Description, Width: c.Width, Height: c.Height}, seq
+}
+func (videoSource) StopVideo() { screen.H264Stop() }
 
 func orRandom(t string) string {
 	if t != "" {

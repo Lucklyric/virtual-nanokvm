@@ -61,10 +61,11 @@ func ftoa(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 func setup(t *testing.T) (*httptest.Server, *fakeCtl) {
 	t.Helper()
 	ctl := &fakeCtl{released: make(chan struct{}, 4)}
-	s := New(Config{ControlToken: "ctl", ViewToken: "view", FPS: 50}, ctl, fakeSource{})
+	s := New(Config{ControlToken: "ctl", ViewToken: "view", FPS: 50}, ctl, fakeSource{}, &fakeVideo{})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go s.Run(ctx)
+	go s.RunVideo(ctx)
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	return srv, ctl

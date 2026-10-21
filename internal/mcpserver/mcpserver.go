@@ -17,6 +17,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Lucklyric/virtual-nanokvm/internal/doctor"
 	"github.com/Lucklyric/virtual-nanokvm/internal/human"
 	"github.com/Lucklyric/virtual-nanokvm/internal/screen"
 )
@@ -153,8 +154,17 @@ type windowList struct {
 
 type empty struct{}
 
-// New builds the MCP server.
-func New(e *human.Engine, scr Screen) *mcp.Server {
+type doctorArgs struct {
+	Fix bool `json:"fix,omitempty" jsonschema:"ask macOS for missing permissions (opens the system dialogs)"`
+}
+
+type doctorReport struct {
+	Checks []doctor.Check `json:"checks"`
+}
+
+// New builds the MCP server. bridgeSocket is where doctor looks for the
+// driver input bridge.
+func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.1.0"}, nil)
 
 	frameFor := func(t target) (frame, error) {
@@ -192,6 +202,14 @@ func New(e *human.Engine, scr Screen) *mcp.Server {
 		p, err := e.Cursor.Position()
 		return f.locate(p), err
 	}
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "doctor",
+		Description: "Check setup: macOS version, Accessibility and Screen Recording permissions, whether the display can be captured, driver input, Tailscale. Run it first when a tool fails, and tell the user any FIX lines.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in doctorArgs) (*mcp.CallToolResult, doctorReport, error) {
+		checks := doctor.Run(ctx, bridgeSocket, in.Fix)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: doctor.Format(checks)}}}, doctorReport{checks}, nil
+	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_windows",

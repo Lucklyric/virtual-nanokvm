@@ -10,7 +10,8 @@ bin="$root/bin/vnkvm"
 
 if [ ! -x "$bin" ] || [ -n "$(find "$root/cmd" "$root/internal" "$root/go.mod" -newer "$bin" -name '*.go' -o -newer "$bin" -name go.mod 2>/dev/null | head -1)" ]; then
 	if ! command -v go >/dev/null 2>&1; then
-		echo "vnkvm: Go is required to build the server (brew install go)" >&2
+		echo "vnkvm: Go is required to build the server. Install everything with:" >&2
+		echo "  curl -fsSL https://raw.githubusercontent.com/Lucklyric/virtual-nanokvm/main/install.sh | bash" >&2
 		exit 1
 	fi
 	(cd "$root" && go build -o "$bin" ./cmd/vnkvm) >&2

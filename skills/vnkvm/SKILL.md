@@ -7,6 +7,10 @@ description: Operate macOS apps through the vnkvm MCP tools (screenshot, list_wi
 
 vnkvm drives the real mouse and keyboard with human-like movement. The person at the Mac shares the same cursor, so act deliberately.
 
+## Setup
+
+If a tool fails, or on first use, call `doctor` (with `fix: true` to raise the macOS permission dialogs) and tell the user each `FIX` line. A locked Mac or sleeping display cannot be captured.
+
 ## Loop
 
 1. **Look first.** Call `screenshot`. If you work in one app, pass `app` (for example `"Safari"`) or a `window_id` from `list_windows`. A window capture works even when other windows cover it.

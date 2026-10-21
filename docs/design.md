@@ -100,11 +100,21 @@ Typing presses shift before a shifted key. Each key is held 40–95 ms. Gaps bet
 
 ## Browser viewer (`vnkvm serve`)
 
-- **Stream:** ScreenCaptureKit captures the main display in-process (cursor included) as a JPEG at `--width` (about 40 ms per frame at 1280 px). Frames go out as an MJPEG stream (`multipart/x-mixed-replace`) at `--fps`. Capture runs only while someone watches, and a slow viewer gets the newest frame, never a backlog.
+- **Video, as on the NanoKVM: H.264 with an MJPEG fallback.**
+  - **H.264 (`/video`, WebSocket):** ScreenCaptureKit captures a frame (`captureSampleBufferWithFilter`, BGRA, cursor included) and VideoToolbox encodes it in real time: main profile, no B-frames (decode order must equal display order), low-latency rate control where available, a keyframe every 4 s, `--kbps` bitrate. The encoder output callback queues AVCC frames in C, and Go pulls them, so no Go function is exported to C. The first message is `{"t":"config"}` with the codec string (`avc1.PPCCLL` from the SPS) and the avcC record built from SPS and PPS. Then come binary frames: `[1 byte keyframe flag][8 byte timestamp in µs][AVCC data]`. Each viewer skips frames until a keyframe. A new viewer, or one that falls behind, forces a keyframe. The browser decodes with WebCodecs `VideoDecoder` onto a canvas.
+  - **MJPEG (`/stream`):** ScreenCaptureKit captures a JPEG at `--width` (about 40 ms per frame at 1280 px), sent as `multipart/x-mixed-replace` at `--fps`.
+  - **Choice:** WebCodecs exists only in a secure context (HTTPS or localhost). The viewer uses H.264 when it can, and falls back to MJPEG when it cannot, or when no frame arrives within 5 s. Capture runs only while someone watches, and a slow viewer gets the newest frame, never a backlog.
+  - **Locked screen:** macOS offers no display to capture while the Mac is locked or the display sleeps; a hardware KVM would still see it.
+- **Tailscale (`--tailscale`):** reads `tailscale status --json`, finding the CLI on PATH or inside `/Applications/Tailscale.app`. If the tailnet has HTTPS certificates, the server binds `127.0.0.1` and `tailscale serve --bg --https=8443` proxies HTTPS to it, removed again on exit (`--https=8443 off`). Viewers get an HTTPS MagicDNS link and H.264. Without certificates it binds the Mac's tailnet IPv4 over HTTP (encrypted by WireGuard), and viewers get MJPEG.
 - **Roles:** two tokens. The view token can watch. The control token can also drive input. The token rides in the link's URL fragment, so it never shows up in server logs, and the page passes it to `/stream` and `/control`. Plain HTTP: use it on a trusted network, or bind `127.0.0.1`.
 - **Control:** a WebSocket (`/control`) carries pointer position (as a fraction of the image), buttons, wheel notches and physical key codes (`KeyboardEvent.code`, mapped to HID usages). Only one controller at a time; a second gets `409`. When the controller leaves, or the tab loses focus, every key and button is released.
 - **Relay, not generation:** a person's hand already moves like a person, so the engine passes it through (`RelayMove`, `RelayButtons`, `RelayWheel`, `RelayKeys`). Moves feed forward from the last relayed point with a gentle pull toward the real cursor. The engine learns the acceleration gain as it goes, and closes the gap in half steps once the hand holds still. After the hand stops, the viewer repeats the final spot a few times so the cursor settles on it.
 - **Shared engine:** relayed input shares the engine's lock and button state with agent actions, so reports never interleave. An agent action running in another process sees the remote hand as a person taking over, and stops.
+
+## Install and setup
+
+- **`install.sh`** (`curl … | bash`): checks macOS and the Xcode command line tools, installs Go with Homebrew if missing, clones or updates `~/.vnkvm`, builds, links `vnkvm` into `~/.local/bin`, then runs `vnkvm doctor --fix`. `--claude` and `--codex` also add the agent plugins.
+- **`vnkvm doctor`** (also an MCP tool, and `/vnkvm:setup` in Claude Code): checks the macOS version, Accessibility (`AXIsProcessTrustedWithOptions`), Screen Recording (`CGPreflightScreenCaptureAccess`), whether a display can be captured now, the driver bridge, and Tailscale (connected, HTTPS certificates). `--fix` raises the macOS permission dialogs. Lines read `ok`, `FIX` (blocks vnkvm) or `--` (optional feature).
 
 ## Plugin packaging
 
@@ -138,6 +148,6 @@ Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds 
 ## Roadmap
 
 - **v1**: both input paths, human-like engine with take-over detection, MCP over stdio, screen and window screenshots.
-- **v2 (this)**: browser viewer with an MJPEG stream and remote control, token roles, one controller at a time.
-- **v2.1**: H.264 (VideoToolbox) over WebRTC for smoother, lower-bandwidth video; HTTPS.
+- **v2**: browser viewer with an MJPEG stream and remote control, token roles, one controller at a time.
+- **v2.1 (this)**: H.264 (VideoToolbox → WebCodecs) with MJPEG fallback, Tailscale sharing with HTTPS via `tailscale serve`, one-line installer, `doctor`.
 - **v3**: launchd units for the bridge and daemon, full-display capture of secondary screens (windows on any screen already work), and Linux (USB gadget on `dummy_hcd` or USB/IP) and Windows targets.

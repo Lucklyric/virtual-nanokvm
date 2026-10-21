@@ -4,6 +4,15 @@ package hid
 #cgo LDFLAGS: -framework ApplicationServices -framework CoreFoundation
 #include <ApplicationServices/ApplicationServices.h>
 
+static int vnkvm_ax_trusted(int prompt) {
+	const void *k[] = {kAXTrustedCheckOptionPrompt};
+	const void *v[] = {prompt ? kCFBooleanTrue : kCFBooleanFalse};
+	CFDictionaryRef opts = CFDictionaryCreate(NULL, k, v, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	int ok = AXIsProcessTrustedWithOptions(opts);
+	CFRelease(opts);
+	return ok;
+}
+
 static CGEventSourceRef vnkvm_source(void) {
 	static CGEventSourceRef src = NULL;
 	if (src == NULL) {
@@ -81,6 +90,16 @@ static int vnkvm_key(CGKeyCode code, bool down, CGEventFlags flags, bool modifie
 import "C"
 
 import "errors"
+
+// AccessibilityTrusted reports whether this process may post input events
+// (the sys input). With prompt, macOS shows its permission dialog.
+func AccessibilityTrusted(prompt bool) bool {
+	p := 0
+	if prompt {
+		p = 1
+	}
+	return C.vnkvm_ax_trusted(C.int(p)) != 0
+}
 
 // NewCGEvent returns the synthetic-event backend. It fails when the process
 // lacks the Accessibility permission, since macOS would silently drop events.

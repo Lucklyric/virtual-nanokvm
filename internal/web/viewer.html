@@ -16,8 +16,9 @@
   button.on { background: var(--on); }
   button[hidden] { display: none; }
   main { padding: 12px 16px; }
-  #screen { display: block; width: 100%; height: auto; max-height: calc(100vh - 80px); object-fit: contain; border-radius: 6px; background: #000; user-select: none; -webkit-user-drag: none; }
-  #screen.control { cursor: none; outline: 2px solid var(--on); }
+  #stage > * { display: block; width: 100%; height: auto; max-height: calc(100vh - 80px); object-fit: contain; border-radius: 6px; background: #000; user-select: none; -webkit-user-drag: none; }
+  #stage > [hidden] { display: none; }
+  #stage.control > * { cursor: none; outline: 2px solid var(--on); }
   #msg { color: var(--muted); padding: 24px 0; }
 </style>
 </head>
@@ -31,51 +32,107 @@
 </header>
 <main>
   <div id="msg"></div>
-  <img id="screen" alt="Live screen" draggable="false" hidden>
+  <div id="stage">
+    <canvas id="video" hidden></canvas>
+    <img id="mjpeg" alt="Live screen" draggable="false" hidden>
+  </div>
 </main>
 <script>
 (() => {
   // The token rides in the URL fragment so it never reaches server logs.
   const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
   const q = "token=" + encodeURIComponent(token);
+  const wsBase = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
   const $ = (id) => document.getElementById(id);
-  const img = $("screen"), toggle = $("toggle"), msg = $("msg");
-  let ws = null, controlling = false;
+  const stage = $("stage"), canvas = $("video"), img = $("mjpeg"), toggle = $("toggle"), msg = $("msg");
+  let view = img, ws = null, controlling = false, info = null;
+
+  const setStatus = (mode) => { $("status").textContent = `${info.width}×${info.height} · ${mode} · ${info.fps} fps`; };
 
   fetch("/api/info?" + q).then((r) => {
     if (!r.ok) throw new Error("This link has no valid token.");
     return r.json();
-  }).then((info) => {
+  }).then((i) => {
+    info = i;
     $("role").textContent = info.role === "control" ? "control" : "view only";
-    $("status").textContent = `${info.width}×${info.height} · ${info.fps} fps`;
+    if (info.role === "control") toggle.hidden = false;
+    // H.264 needs WebCodecs, which browsers only offer on HTTPS or localhost.
+    if (info.h264 && window.isSecureContext && "VideoDecoder" in window) startH264();
+    else startMJPEG();
+  }).catch((e) => { msg.textContent = e.message; $("role").textContent = "no access"; });
+
+  function startMJPEG() {
+    canvas.hidden = true;
     img.src = "/stream?" + q;
     img.hidden = false;
-    if (info.role === "control") toggle.hidden = false;
-  }).catch((e) => { msg.textContent = e.message; $("role").textContent = "no access"; });
+    view = img;
+    setStatus("MJPEG");
+  }
+
+  function startH264() {
+    const ctx2d = canvas.getContext("2d");
+    const sock = new WebSocket(`${wsBase}/video?${q}`);
+    sock.binaryType = "arraybuffer";
+    let decoder = null, waitKey = true, frames = 0;
+    // No picture within 5 s: fall back to MJPEG.
+    const fallback = setTimeout(() => { if (!frames) { sock.close(); startMJPEG(); } }, 5000);
+
+    sock.onmessage = (ev) => {
+      if (typeof ev.data === "string") {
+        const m = JSON.parse(ev.data);
+        if (m.t !== "config") return;
+        const c = m.config;
+        if (decoder) decoder.close();
+        decoder = new VideoDecoder({
+          output: (frame) => {
+            if (canvas.width !== frame.displayWidth) { canvas.width = frame.displayWidth; canvas.height = frame.displayHeight; }
+            ctx2d.drawImage(frame, 0, 0);
+            frame.close();
+            if (!frames++) { clearTimeout(fallback); img.hidden = true; canvas.hidden = false; view = canvas; setStatus("H.264"); }
+          },
+          error: () => { sock.close(); startMJPEG(); },
+        });
+        const description = Uint8Array.from(atob(c.description), (ch) => ch.charCodeAt(0));
+        decoder.configure({ codec: c.codec, description, codedWidth: c.width, codedHeight: c.height, optimizeForLatency: true });
+        waitKey = true;
+        return;
+      }
+      if (!decoder || decoder.state !== "configured") return;
+      const buf = new DataView(ev.data);
+      const key = buf.getUint8(0) === 1;
+      if (waitKey && !key) return; // a decoder can only start at a keyframe
+      waitKey = false;
+      decoder.decode(new EncodedVideoChunk({
+        type: key ? "key" : "delta",
+        timestamp: Number(buf.getBigUint64(1)),
+        data: new Uint8Array(ev.data, 9),
+      }));
+    };
+    sock.onerror = () => { if (!frames) { clearTimeout(fallback); startMJPEG(); } };
+  }
 
   const send = (ev) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(ev)); };
 
   function start() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${proto}//${location.host}/control?${q}`);
-    ws.onopen = () => { controlling = true; img.classList.add("control"); toggle.textContent = "Release control"; toggle.classList.add("on"); };
+    ws = new WebSocket(`${wsBase}/control?${q}`);
+    ws.onopen = () => { controlling = true; stage.classList.add("control"); toggle.textContent = "Release control"; toggle.classList.add("on"); };
     ws.onclose = () => { stop(false); };
     ws.onerror = () => { msg.textContent = "Could not take control (someone else may be in control)."; };
   }
   function stop(close = true) {
     if (close && ws) { send({ t: "release" }); ws.close(); }
     ws = null; controlling = false;
-    img.classList.remove("control"); toggle.textContent = "Take control"; toggle.classList.remove("on");
+    stage.classList.remove("control"); toggle.textContent = "Take control"; toggle.classList.remove("on");
   }
   toggle.onclick = () => (controlling ? stop() : (msg.textContent = "", start()));
 
-  // Pointer position as a fraction of the image, so display size never matters.
+  // Pointer position as a fraction of the picture, so display size never matters.
   const frac = (e) => {
-    const r = img.getBoundingClientRect();
+    const r = view.getBoundingClientRect();
     return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
   };
   let pending = null, last = null, settle = null, queued = false;
-  img.addEventListener("pointermove", (e) => {
+  stage.addEventListener("pointermove", (e) => {
     if (!controlling) return;
     pending = frac(e);
     if (queued) return; // at most one move per animation frame
@@ -90,11 +147,11 @@
     });
   });
   const buttons = (e) => { if (controlling) { e.preventDefault(); send({ t: "move", ...frac(e) }); send({ t: "buttons", b: e.buttons }); } };
-  img.addEventListener("pointerdown", (e) => { img.setPointerCapture(e.pointerId); buttons(e); });
-  img.addEventListener("pointerup", buttons);
-  img.addEventListener("contextmenu", (e) => { if (controlling) e.preventDefault(); });
+  stage.addEventListener("pointerdown", (e) => { stage.setPointerCapture(e.pointerId); buttons(e); });
+  stage.addEventListener("pointerup", buttons);
+  stage.addEventListener("contextmenu", (e) => { if (controlling) e.preventDefault(); });
   let wheelX = 0, wheelY = 0;
-  img.addEventListener("wheel", (e) => {
+  stage.addEventListener("wheel", (e) => {
     if (!controlling) return;
     e.preventDefault();
     const unit = e.deltaMode === 1 ? 1 : 40; // lines, or pixels per notch

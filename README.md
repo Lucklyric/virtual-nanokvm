@@ -35,7 +35,15 @@ Around the target, behavior varies too. Some moves overshoot and come back, some
 
 ## Install
 
-Needs macOS, Go and the Xcode command line tools. The MCP server builds itself on first start.
+One line (macOS 14+). It installs Go if needed (with Homebrew), builds vnkvm, links it to `~/.local/bin`, and runs a setup check:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Lucklyric/virtual-nanokvm/main/install.sh | bash
+```
+
+Add `-s -- --claude --codex` after `bash` to install the agent plugins in the same step. Run `vnkvm doctor` at any time to see what is missing; `vnkvm doctor --fix` raises the macOS permission dialogs.
+
+### As an agent plugin
 
 **Claude Code**
 
@@ -51,7 +59,7 @@ codex plugin marketplace add https://github.com/Lucklyric/virtual-nanokvm.git
 codex plugin add vnkvm@virtual-nanokvm
 ```
 
-Both install the MCP server and a `vnkvm` skill that teaches the agent the screenshot → act → check loop. On first use, give the app running the agent **Accessibility** (to control input) and **Screen Recording** (for screenshots) permission. Set `VNKVM_INPUT=driver` to use the driver input instead of `sys`.
+Both install the MCP server and a `vnkvm` skill that teaches the agent the screenshot → act → check loop. The server builds itself on first start (Go and the Xcode command line tools are needed; the one-line installer sets them up). Then run **`/vnkvm:setup`** in Claude Code, or ask Codex to "run the vnkvm doctor": it checks and requests the **Accessibility** and **Screen Recording** permissions for the app running the agent. Set `VNKVM_INPUT=driver` to use the driver input instead of `sys`.
 
 **Any other MCP client**
 
@@ -67,19 +75,24 @@ virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 | `mouse_move`, `click`, `drag`, `scroll` | Human-like mouse actions |
 | `type_text`, `key` | Typing and key combinations (`cmd+c`) |
 | `cursor_position` | Where the cursor is |
+| `doctor` | Checks permissions, display, driver input and Tailscale |
 
 Each position comes back both **global** (whole desktop) and **relative** (pixels in the screenshot). The mouse tools accept coordinates straight from a window's screenshot.
 
 ### Watch and control from a browser
 
 ```sh
-make service
-bin/vnkvm serve --input sys
+vnkvm serve --input sys              # on your local network
+vnkvm serve --input sys --tailscale  # on your tailnet, from anywhere
 ```
 
-It prints two links for your local network: a **control** link (watch, plus mouse and keyboard) and a **view** link (watch only). Open either on any device on the same network. Click **Take control** to drive the Mac; your own hand movement is relayed as-is. One person controls at a time, and every key and button is released when they leave.
+It prints two links: a **control** link (watch, plus mouse and keyboard) and a **view** link (watch only). Click **Take control** to drive the Mac; your own hand movement is relayed as-is. One person controls at a time, and every key and button is released when they leave.
 
-Flags: `--listen` (default `:8090`; use `127.0.0.1:8090` for this Mac only), `--fps` (default 10), `--width` (default 1280), `--token` and `--view-token` (random by default). The links travel over plain HTTP, so use it only on a network you trust. Some shortcuts such as `cmd+w` stay with the browser.
+**Video**, as on the NanoKVM: **H.264** (hardware-encoded with VideoToolbox, decoded in the browser with WebCodecs) when the page is HTTPS or localhost, otherwise **MJPEG**. The viewer picks automatically.
+
+**Tailscale:** `--tailscale` shares the viewer on your tailnet only. If your tailnet has HTTPS certificates (Tailscale admin console > DNS > enable HTTPS Certificates), vnkvm binds localhost and runs `tailscale serve` on port 8443, so viewers get an `https://<mac>.<tailnet>.ts.net:8443` link and H.264. Without certificates it serves plain HTTP on the tailnet address (still encrypted by WireGuard), and viewers get MJPEG.
+
+Flags: `--listen` (default `:8090`), `--fps` (default 10), `--width` (default 1280), `--kbps` (H.264 bitrate, default 3000), `--token` and `--view-token` (random by default). Without `--tailscale`, links travel over plain HTTP, so use your LAN only if you trust it. Some shortcuts such as `cmd+w` stay with the browser. Unlike a hardware KVM, macOS hides the screen from capture while it is locked or asleep.
 
 ### Command line
 

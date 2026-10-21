@@ -10,7 +10,7 @@
 <text x="440" y="67" class="s c">move / click / type</text>
 <rect x="610" y="24" width="230" height="56" rx="8" fill="#f5f3ff" stroke="#c4b5fd"/>
 <text x="725" y="48" class="t c">Browser viewer</text>
-<text x="725" y="67" class="s c">live stream + remote control</text>
+<text x="725" y="67" class="s c">H.264 / MJPEG + remote control</text>
 <line x1="155" y1="80" x2="300" y2="124" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
 <line x1="440" y1="80" x2="440" y2="124" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
 <line x1="725" y1="80" x2="580" y2="124" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>

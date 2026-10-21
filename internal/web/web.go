@@ -1,5 +1,7 @@
-// Package web serves a browser viewer on the local network: a live MJPEG
-// stream of the main display, and remote control of the mouse and keyboard.
+// Package web serves a browser viewer on the local network or a tailnet: a
+// live stream of the main display (H.264 decoded in the browser with
+// WebCodecs, or MJPEG where that is unavailable), and remote control of the
+// mouse and keyboard.
 //
 // Two tokens set two roles. A view token can watch. A control token can also
 // drive input. Only one controller is connected at a time. The person's own
@@ -52,6 +54,7 @@ type Config struct {
 	FPS          int
 	Width        int     // stream width in pixels
 	Quality      float64 // JPEG quality, 0..1
+	Kbps         int     // H.264 bitrate
 }
 
 // Server is the viewer, stream and control endpoint.
@@ -59,15 +62,20 @@ type Server struct {
 	cfg        Config
 	ctl        Controller
 	src        Source
+	video      VideoSource // nil: MJPEG only
 	controlled atomic.Bool
+	keyWanted  atomic.Bool
 
-	mu   sync.Mutex
-	subs map[chan []byte]struct{}
-	wake chan struct{}
+	mu    sync.Mutex
+	subs  map[chan []byte]struct{}
+	wake  chan struct{}
+	vsubs map[*videoSub]struct{}
+	vwake chan struct{}
 }
 
-// New returns a Server. Call Run to start capturing.
-func New(cfg Config, ctl Controller, src Source) *Server {
+// New returns a Server. video may be nil for MJPEG only. Call Run (MJPEG)
+// and RunVideo (H.264) to start capturing.
+func New(cfg Config, ctl Controller, src Source, video VideoSource) *Server {
 	if cfg.FPS <= 0 {
 		cfg.FPS = 10
 	}
@@ -77,7 +85,14 @@ func New(cfg Config, ctl Controller, src Source) *Server {
 	if cfg.Quality <= 0 {
 		cfg.Quality = 0.6
 	}
-	return &Server{cfg: cfg, ctl: ctl, src: src, subs: map[chan []byte]struct{}{}, wake: make(chan struct{}, 1)}
+	if cfg.Kbps <= 0 {
+		cfg.Kbps = 3000
+	}
+	return &Server{
+		cfg: cfg, ctl: ctl, src: src, video: video,
+		subs: map[chan []byte]struct{}{}, wake: make(chan struct{}, 1),
+		vsubs: map[*videoSub]struct{}{}, vwake: make(chan struct{}, 1),
+	}
 }
 
 // Handler routes the viewer page, the stream and the control socket.
@@ -89,6 +104,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/info", s.info)
 	mux.HandleFunc("GET /stream", s.stream)
+	mux.HandleFunc("GET /video", s.videoWS)
 	mux.HandleFunc("GET /control", s.control)
 	return mux
 }
@@ -116,7 +132,7 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"role": role, "width": width, "height": height, "fps": s.cfg.FPS,
-		"controlled": s.controlled.Load(),
+		"controlled": s.controlled.Load(), "h264": s.video != nil,
 	})
 }
 
@@ -297,4 +313,9 @@ func (k *keyboard) set(code string, down bool) bool {
 		k.keys = append(k.keys, usage)
 	}
 	return true
+}
+
+func jsonMsg(v any) (wsMsg, error) {
+	b, err := json.Marshal(v)
+	return wsMsg{text: true, data: b}, err
 }

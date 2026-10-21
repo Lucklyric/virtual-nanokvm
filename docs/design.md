@@ -86,6 +86,18 @@ Typing presses shift before a shifted key. Each key is held 40–95 ms. Gaps bet
 | `act` | Runs up to 20 steps in order: `move`, `click`, `double_click`, `right_click`, `drag`, `scroll`, `type`, `key`, `wait`, `wait_for` (`change` or `stable`). Validates every step before anything moves, stops at the first failure, then returns a new low shot (`observe`, default on). |
 | `cursor_position` | Returns the cursor in global points and in a shot's pixels. |
 | `mouse_move`, `click`, `drag`, `scroll`, `type_text`, `key` | One step each, with `observe` off by default. |
+| `lessons` | Reads or records one-line lessons for an app, and returns the session's counters. |
+
+### Privacy: one app at a time
+
+- `screenshot` needs `app` or `window_id`. Whole-display capture is off unless the person starts the server with `--allow-display` or `VNKVM_ALLOW_DISPLAY=1`. A window capture (`screencapture -l`) contains that window only, even when others cover it.
+- The look after `act` stays in the same window. If that window is gone, there is no look, rather than a fall back to the whole display.
+- `list_windows` returns ids, apps and bounds for every window, but titles only for the app the agent names, since titles can hold mail subjects or document names.
+- Settle and change detection compare in-process previews of the display; those pixels never leave the server.
+
+### Lessons
+
+The server counts shots, zooms, single-action calls, `act` calls, steps and failures by kind. When a loop looks slow (three looks without an action, three single actions in a row, the same failure twice), it adds one `Efficiency:` line to the tool result. The skill then records a lesson with `lessons`: one line per app, newest 40 kept, in `~/.config/vnkvm/lessons/<app>.md` (`VNKVM_LESSONS_DIR` overrides), outside the plugin and the source checkout so updates keep them. The skill reads an app's lessons before planning there, and never records personal text or window contents.
 
 ### Shots and coordinates
 
@@ -149,5 +161,6 @@ Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds 
 - **v1**: both input paths, human-like engine with take-over detection, MCP over stdio, screen and window screenshots.
 - **v2**: browser viewer with an MJPEG stream and remote control, token roles, one controller at a time.
 - **v2.1**: H.264 (VideoToolbox → WebCodecs) with MJPEG fallback, Tailscale sharing with HTTPS via `tailscale serve`, one-line installer, `doctor`.
-- **v2.2 (this)**: shot ids, low-detail first looks with zoom and aim marks, `act` sequences with settle and change detection, and a skill that teaches the agent to plan sequences.
+- **v2.2**: shot ids, low-detail first looks with zoom and aim marks, `act` sequences with settle and change detection, and a skill that teaches the agent to plan sequences.
+- **v2.3 (this)**: app-only screenshots by default, titles hidden for other apps, per-app lessons with efficiency hints.
 - **v3**: launchd units for the bridge and daemon, full-display capture of secondary screens (windows on any screen already work), and Linux (USB gadget on `dummy_hcd` or USB/IP) and Windows targets.

@@ -74,12 +74,15 @@ virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 | `act` | Up to 20 planned actions in one call (move, click, type, key, scroll, drag, wait), then a new low-detail look once the screen settles |
 | `list_windows` | App windows with ids and positions |
 | `mouse_move`, `click`, `drag`, `scroll`, `type_text`, `key` | Single actions, with an optional look afterwards |
+| `lessons` | Per-app notes on what made a task slow and what worked, kept on this Mac |
 | `cursor_position` | Where the cursor is |
 | `doctor` | Checks permissions, display, driver input and Tailscale |
 
 Every image has a shot id, and coordinates are pixels of a named shot. vnkvm maps them to the screen, follows a window that moved, and refuses a window that changed size or a point another window covers. So an agent can look at 1024 px, zoom where it needs detail, and click from either image without mixing them up.
 
-The bundled skill teaches the agent to plan: look once, chain every step it can already see into one `act` call, prefer keyboard shortcuts, and stop the sequence where the next target only appears after the screen changes. One model turn then covers several actions.
+Screenshots cover one app's window, never the whole display, unless you allow it with `VNKVM_ALLOW_DISPLAY=1`. `list_windows` shows window titles only for the app the agent names.
+
+The bundled skill teaches the agent to plan: look once, chain every step it can already see into one `act` call, prefer keyboard shortcuts, and stop the sequence where the next target only appears after the screen changes. One model turn then covers several actions. When the server sees a slow loop (looks without actions, single actions in a row, a repeated failure), it says so in the tool result, and the agent records a one-line lesson for that app in `~/.config/vnkvm/lessons/`. The next task in that app starts by reading it.
 
 ### Watch and control from a browser
 

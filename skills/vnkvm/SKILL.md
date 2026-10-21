@@ -21,7 +21,8 @@ If a tool fails, or on first use, call `doctor` (with `fix: true` to raise the m
 
 ## The loop
 
-1. **Look low.** `screenshot` with `app` (or `window_id` from `list_windows`) at the default 1024 px. Use the whole display only when the task spans apps.
+0. **Read the lessons.** Call `lessons` with the app name. Apply what earlier tasks learned there before planning.
+1. **Look low, at one app.** `screenshot` with `app` (or `window_id` from `list_windows`) at the default 1024 px. Screenshots cover one app's window only; whole-display capture is off unless the person turned it on. Look only at the app the task needs.
 2. **Plan a sequence.** Before acting, write down the steps and what the screen should look like after each one. Put in one `act` call every step whose target you can already see, or whose effect you can predict with confidence.
 3. **Zoom only when needed.** If a target is small, its text is hard to read, or two targets sit close together, call `screenshot` with `shot` and `region` around it. To check aim before an important click, call `screenshot` with `shot` and `mark` at the planned pixel: the crosshair shows where it will land.
 4. **Act.** Send the planned steps to `act`. It returns what each step did and a new low shot after the screen settles.
@@ -47,6 +48,17 @@ Example: search from a Safari window seen in shot 4. Only the keyboard is needed
 ]}
 ```
 
+## Learn from slow tasks
+
+The server watches the loop and adds an `Efficiency:` hint to a tool result when it looks slow: three looks without an action, three single actions in a row, or the same failure twice. `lessons` also returns the session's counters.
+
+When you see a hint, or a task took clearly more turns than its steps needed, record what you learned with `lessons` and `add`, in one line:
+
+- what slowed you down, and what worked instead (for example: "The search field needs a click before cmd+f works; then one act call does the whole search.");
+- a shortcut, a stable position or a wait that this app needs.
+
+Keep lessons short and general. Merge or drop outdated ones with `set`. Never record passwords, personal text, names, or anything read from the window.
+
 ## When a sequence fails
 
 - The report says which step failed and why, and the returned shot shows the screen now. Re-plan from that shot; do not repeat the whole sequence blindly.
@@ -64,3 +76,4 @@ Example: search from a Safari window seen in shot 4. Only the keyboard is needed
 
 - Confirm before anything destructive or hard to undo: deleting, sending, purchasing, submitting forms. Planning a sequence does not replace this: stop the sequence before the irreversible step and ask.
 - Do not type passwords or secrets unless the person explicitly gives them for this purpose.
+- Look only at the app the task needs. `list_windows` hides other apps' window titles; do not open other apps to look around.

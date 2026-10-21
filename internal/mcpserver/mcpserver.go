@@ -161,6 +161,31 @@ type actReport struct {
 	Shot  *shotInfo `json:"shot,omitempty" jsonschema:"the observation shot"`
 }
 
+type listArgs struct {
+	App string `json:"app,omitempty" jsonschema:"show window titles for this app only (name substring); other apps are listed without titles"`
+}
+
+type lessonArgs struct {
+	App string   `json:"app" jsonschema:"the app the lessons are about, e.g. Safari"`
+	Add string   `json:"add,omitempty" jsonschema:"a new lesson: what slowed you down and what worked, one line, no personal content"`
+	Set []string `json:"set,omitempty" jsonschema:"replace all lessons for this app, to merge or drop outdated ones"`
+}
+
+type lessonReport struct {
+	App     string   `json:"app"`
+	Lessons []string `json:"lessons"`
+	Stats   stats    `json:"session_stats" jsonschema:"what this session has done so far"`
+}
+
+// Options configure the server.
+type Options struct {
+	BridgeSocket string // where doctor looks for the driver input bridge
+	AllowDisplay bool   // allow whole-display screenshots; off, only app windows are captured
+}
+
+const displayOff = "whole-display screenshots are off: name the app (app or window_id). " +
+	"The person can allow them with VNKVM_ALLOW_DISPLAY=1"
+
 type windowList struct {
 	Windows []screen.Window `json:"windows" jsonschema:"on-screen app windows, frontmost first; x, y, width, height in global points"`
 }
@@ -175,19 +200,20 @@ type doctorReport struct {
 	Checks []doctor.Check `json:"checks"`
 }
 
-// New builds the MCP server. bridgeSocket is where doctor looks for the
-// driver input bridge.
-func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.2.0"}, nil)
+// New builds the MCP server.
+func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
+	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.3.0"}, nil)
 	reg := &shots{}
+	st := &stats{}
 
 	// do runs steps, then optionally looks again. Every action tool uses it.
-	do := func(ctx context.Context, steps []step, defShot int, observe bool, width int) (*mcp.CallToolResult, actReport, error) {
+	do := func(ctx context.Context, steps []step, defShot int, observe bool, width int, batch bool) (*mcp.CallToolResult, actReport, error) {
 		r := &runner{e: e, scr: scr, reg: reg}
 		if err := r.validate(steps, defShot); err != nil {
 			return nil, actReport{}, err
 		}
 		lines, runErr := r.run(ctx, steps)
+		hint := st.action(!batch, len(lines), runErr)
 		rep := actReport{Steps: lines}
 		res := &mcp.CallToolResult{}
 		text := strings.Join(lines, "\n")
@@ -205,16 +231,24 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 			if base == nil {
 				base = reg.latest()
 			}
-			if base != nil && base.Window != 0 {
+			var lookErr error
+			switch {
+			case base != nil && base.Window != 0:
 				if _, err := scr.FindWindow(base.Window, ""); err == nil {
 					req.Window = base.Window
+				} else if !opt.AllowDisplay {
+					lookErr = fmt.Errorf("window %d is gone; take a screenshot of the app now in front", base.Window)
 				}
+			case base == nil && !opt.AllowDisplay:
+				lookErr = fmt.Errorf("no app screenshot yet; take one with app")
 			}
 			settled := ""
-			if last := steps[len(steps)-1]; last.Do != "wait_for" || last.Until != "stable" {
+			if last := steps[len(steps)-1]; lookErr == nil && (last.Do != "wait_for" || last.Until != "stable") {
 				settled = r.settle(ctx, settleTimeout)
 			}
-			if sh, img, err := take(ctx, scr, reg, req); err == nil {
+			if lookErr != nil {
+				text += "\nno observation: " + lookErr.Error()
+			} else if sh, img, err := take(ctx, scr, reg, req); err == nil {
 				in := info(scr, e, sh)
 				rep.Shot = &in
 				res.Content = append(res.Content, &mcp.ImageContent{Data: img, MIMEType: "image/jpeg"})
@@ -222,6 +256,9 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 			} else {
 				text += "\nobservation failed: " + err.Error()
 			}
+		}
+		if hint != "" {
+			text += "\n" + hint
 		}
 		res.Content = append(res.Content, &mcp.TextContent{Text: text})
 		return res, rep, nil
@@ -231,20 +268,53 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 		Name:        "doctor",
 		Description: "Check setup: macOS version, Accessibility and Screen Recording permissions, whether the display can be captured, driver input, Tailscale. Run it first when a tool fails, and tell the user any FIX lines.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in doctorArgs) (*mcp.CallToolResult, doctorReport, error) {
-		checks := doctor.Run(ctx, bridgeSocket, in.Fix)
+		checks := doctor.Run(ctx, opt.BridgeSocket, in.Fix)
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: doctor.Format(checks)}}}, doctorReport{checks}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_windows",
-		Description: "List on-screen app windows, frontmost first, with ids and global bounds.",
-	}, func(context.Context, *mcp.CallToolRequest, empty) (*mcp.CallToolResult, windowList, error) {
-		return nil, windowList{scr.Windows()}, nil
+		Description: "List on-screen app windows, frontmost first, with ids and global bounds. Titles are shown only for the app you name.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in listArgs) (*mcp.CallToolResult, windowList, error) {
+		ws := scr.Windows()
+		for i := range ws {
+			if in.App == "" || !strings.Contains(strings.ToLower(ws[i].App), strings.ToLower(in.App)) {
+				ws[i].Title = "" // other apps' titles can be private (mail subjects, documents)
+			}
+		}
+		return nil, windowList{ws}, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "lessons",
+		Description: "Read or record lessons for one app: what slowed the work down and what worked. " +
+			"Read them before planning in that app. Add one when a task was slow, a failure repeated, or a server hint says the loop is inefficient. " +
+			"Also returns this session's counters. Lessons stay on this Mac; never record passwords, personal text or window contents.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in lessonArgs) (*mcp.CallToolResult, lessonReport, error) {
+		var lines []string
+		var err error
+		switch {
+		case in.Set != nil:
+			for _, l := range in.Set {
+				if l = strings.Join(strings.Fields(l), " "); l != "" {
+					lines = append(lines, l)
+				}
+			}
+			err = writeLessons(in.App, lines)
+		case in.Add != "":
+			lines, err = addLesson(in.App, in.Add)
+		default:
+			lines, err = readLessons(in.App)
+		}
+		if err != nil {
+			return nil, lessonReport{}, err
+		}
+		return nil, lessonReport{App: in.App, Lessons: lines, Stats: st.snapshot()}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "screenshot",
-		Description: "Look at the screen. Start low: a whole window (app or window_id) or the display at the default 1024 px. " +
+		Description: "Look at one app's window: name it with app or window_id (a covered window still works). Start low at the default 1024 px. " +
 			"Zoom only when a target is small, text is unreadable or two targets are close: pass shot plus region (in that shot's pixels) " +
 			"for a sharp crop, or shot plus mark to see exactly where a click would land. " +
 			"Each image has a shot id; pass it with any coordinates you read from that image.",
@@ -272,15 +342,21 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 				return nil, shotInfo{}, err
 			}
 			req.Window = w.ID
+		case !opt.AllowDisplay:
+			return nil, shotInfo{}, fmt.Errorf("%s", displayOff)
 		}
 		sh, img, err := take(ctx, scr, reg, req)
 		if err != nil {
 			return nil, shotInfo{}, err
 		}
 		out := info(scr, e, sh)
+		note := out.note()
+		if hint := st.shot(req.Base != nil); hint != "" {
+			note += "\n" + hint
+		}
 		return &mcp.CallToolResult{Content: []mcp.Content{
 			&mcp.ImageContent{Data: img, MIMEType: "image/jpeg"},
-			&mcp.TextContent{Text: out.note()},
+			&mcp.TextContent{Text: note},
 		}}, out, nil
 	})
 
@@ -293,7 +369,7 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 			"The sequence stops at the first failure, or when the person moves the mouse.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in actArgs) (*mcp.CallToolResult, actReport, error) {
 		observe := in.Observe == nil || *in.Observe
-		return do(ctx, in.Steps, in.Shot, observe, in.Width)
+		return do(ctx, in.Steps, in.Shot, observe, in.Width, true)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -324,7 +400,7 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 		Name:        "mouse_move",
 		Description: "Move the mouse to a pixel of a shot along a human-like path.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in moveArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "move", X: &in.X, Y: &in.Y, Size: in.Size}}, in.Shot, in.Observe, 0)
+		return do(ctx, []step{{Do: "move", X: &in.X, Y: &in.Y, Size: in.Size}}, in.Shot, in.Observe, 0, false)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -340,35 +416,35 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 		case in.Count == 2:
 			st.Do = "double_click"
 		}
-		return do(ctx, []step{st}, in.Shot, in.Observe, 0)
+		return do(ctx, []step{st}, in.Shot, in.Observe, 0, false)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "drag",
 		Description: "Hold the left button at the current position, move to a pixel of a shot and release. Move to the start first.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in dragArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "drag", X: &in.X, Y: &in.Y}}, in.Shot, in.Observe, 0)
+		return do(ctx, []step{{Do: "drag", X: &in.X, Y: &in.Y}}, in.Shot, in.Observe, 0, false)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "scroll",
 		Description: "Turn the scroll wheel at the current cursor position.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in scrollArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "scroll", DX: in.DX, DY: in.DY}}, 0, in.Observe, 0)
+		return do(ctx, []step{{Do: "scroll", DX: in.DX, DY: in.DY}}, 0, in.Observe, 0, false)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "type_text",
 		Description: "Type text with human rhythm into the focused field.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in typeArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "type", Text: in.Text, WPM: in.WPM}}, 0, in.Observe, 0)
+		return do(ctx, []step{{Do: "type", Text: in.Text, WPM: in.WPM}}, 0, in.Observe, 0, false)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "key",
 		Description: "Press a key or key combination such as enter, escape, cmd+c, cmd+shift+4.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in keyArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "key", Keys: in.Keys}}, 0, in.Observe, 0)
+		return do(ctx, []step{{Do: "key", Keys: in.Keys}}, 0, in.Observe, 0, false)
 	})
 
 	return s

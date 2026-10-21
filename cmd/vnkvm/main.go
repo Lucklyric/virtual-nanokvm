@@ -93,6 +93,7 @@ func main() {
 	useTailscale := fs.Bool("tailscale", false, "serve: share on your tailnet (HTTPS via tailscale serve when the tailnet has HTTPS certificates)")
 	tsHTTPSPort := fs.Int("tailscale-https-port", 8443, "serve: HTTPS port for tailscale serve")
 	fix := fs.Bool("fix", false, "doctor: ask macOS for missing permissions")
+	allowDisplay := fs.Bool("allow-display", os.Getenv("VNKVM_ALLOW_DISPLAY") == "1", "mcp: allow whole-display screenshots (default: one app window at a time)")
 	fs.Parse(os.Args[2:])
 	args := fs.Args()
 
@@ -119,7 +120,7 @@ func main() {
 
 	switch cmd {
 	case "mcp":
-		server := mcpserver.New(engine, mainScreen{}, *socket)
+		server := mcpserver.New(engine, mainScreen{}, mcpserver.Options{BridgeSocket: *socket, AllowDisplay: *allowDisplay})
 		if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
 			log.Print(err)
 		}

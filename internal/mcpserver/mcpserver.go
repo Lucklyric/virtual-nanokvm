@@ -159,10 +159,12 @@ type keyArgs struct {
 }
 
 type actArgs struct {
-	Shot    int    `json:"shot,omitempty" jsonschema:"default shot for the steps' coordinates"`
-	Steps   []step `json:"steps" jsonschema:"actions in order; the sequence stops at the first failure"`
-	Observe *bool  `json:"observe,omitempty" jsonschema:"return a new low-detail shot after the steps (default true)"`
-	Width   int    `json:"width,omitempty" jsonschema:"width of that shot (default 1024)"`
+	Shot    int               `json:"shot,omitempty" jsonschema:"default shot for the steps' coordinates; with recipe, a whole-window shot of the app"`
+	Recipe  string            `json:"recipe,omitempty" jsonschema:"run this saved recipe of the shot's app first (see recipes); steps, if any, run after it"`
+	Args    map[string]string `json:"args,omitempty" jsonschema:"values for the recipe's placeholders, e.g. {\"text2\": \"weather\"}"`
+	Steps   []step            `json:"steps,omitempty" jsonschema:"actions in order; the sequence stops at the first failure"`
+	Observe *bool             `json:"observe,omitempty" jsonschema:"return a new low-detail shot after the steps (default true)"`
+	Width   int               `json:"width,omitempty" jsonschema:"width of that shot (default 1024)"`
 	modeArg
 }
 
@@ -177,15 +179,35 @@ type listArgs struct {
 }
 
 type lessonArgs struct {
-	App string   `json:"app" jsonschema:"the app the lessons are about, e.g. Safari"`
-	Add string   `json:"add,omitempty" jsonschema:"a new lesson: what slowed you down and what worked, one line, no personal content"`
-	Set []string `json:"set,omitempty" jsonschema:"replace all lessons for this app, to merge or drop outdated ones"`
+	App  string   `json:"app" jsonschema:"the app the lessons are about, e.g. Safari; all for rules that hold in every app"`
+	Add  string   `json:"add,omitempty" jsonschema:"a new lesson: what slowed you down and what worked, one line, no personal content"`
+	Set  []string `json:"set,omitempty" jsonschema:"replace all lessons for this app, to merge, rewrite or drop lines; keep a line's v tag when you keep the line"`
+	Done string   `json:"done,omitempty" jsonschema:"the task just finished, in a few generic words (no names, queries or window text); records what it cost under the current lessons"`
 }
 
 type lessonReport struct {
+	App      string        `json:"app"`
+	Version  int           `json:"version" jsonschema:"bumped by every add or set; each lesson line is tagged with the version that added it"`
+	Lessons  []string      `json:"lessons"`
+	Tasks    []task        `json:"recent_tasks,omitempty" jsonschema:"the last finished tasks in this app and what they cost"`
+	Versions []versionStat `json:"by_version,omitempty" jsonschema:"average cost of the tasks run under each lessons version"`
+	Review   string        `json:"review,omitempty" jsonschema:"set when the lessons are due for a revision"`
+	Stats    counters      `json:"session_stats" jsonschema:"what this session has done so far"`
+}
+
+type recipeArgs struct {
+	App      string `json:"app,omitempty" jsonschema:"list or delete recipes of this app"`
+	Save     string `json:"save,omitempty" jsonschema:"save steps as a recipe with this name (lowercase, digits, _); the same name replaces it"`
+	When     string `json:"when,omitempty" jsonschema:"save: the situation it is for, generic, e.g. Safari window with any page open"`
+	Shot     int    `json:"shot,omitempty" jsonschema:"save: the default shot of the steps' coordinates, as in act"`
+	Steps    []step `json:"steps,omitempty" jsonschema:"save: the steps that worked, exactly as sent to act"`
+	KeepText bool   `json:"keep_text,omitempty" jsonschema:"save: keep typed text as is (only for fixed, non-personal text); otherwise it becomes {{textN}} placeholders"`
+	Delete   string `json:"delete,omitempty" jsonschema:"delete the recipe with this name"`
+}
+
+type recipeReport struct {
 	App     string   `json:"app"`
-	Lessons []string `json:"lessons"`
-	Stats   counters `json:"session_stats" jsonschema:"what this session has done so far"`
+	Recipes []recipe `json:"recipes"`
 }
 
 // Options configure the server.
@@ -214,9 +236,18 @@ type doctorReport struct {
 
 // New builds the MCP server.
 func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.4.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.5.0"}, nil)
 	reg := &shots{}
 	st := &stats{}
+	// Every tool call is a model turn: the cost the lessons try to bring down.
+	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "tools/call" {
+				st.call()
+			}
+			return next(ctx, method, req)
+		}
+	})
 
 	// do runs steps, then optionally looks again. Every action tool uses it.
 	do := func(ctx context.Context, steps []step, defShot int, observe bool, width int, batch bool, mode string) (*mcp.CallToolResult, actReport, error) {
@@ -236,6 +267,7 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 		}
 		lines, runErr := r.run(ctx, steps)
 		hint := st.action(!batch, len(lines), runErr)
+		st.predicted(r.expects, r.misses, false)
 		rep := actReport{Steps: lines}
 		res := &mcp.CallToolResult{}
 		text := strings.Join(lines, "\n")
@@ -245,6 +277,9 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 			text += "\n" + runErr.Error()
 			if tookControl(runErr) {
 				text += "\nThe person moved the mouse. Everything is released. Stop and ask before continuing."
+			}
+			if r.misses > 0 {
+				text += "\nThe screen did not do what the plan predicted; the steps after the expect did not run. Plan again from the new shot."
 			}
 		}
 		if observe && ctx.Err() == nil {
@@ -265,8 +300,8 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 				lookErr = fmt.Errorf("no app screenshot yet; take one with app")
 			}
 			settled := ""
-			if last := steps[len(steps)-1]; lookErr == nil && (last.Do != "wait_for" || last.Until != "stable") {
-				settled = r.settle(ctx, settleTimeout)
+			if last := steps[len(steps)-1]; lookErr == nil && ((last.Do != "wait_for" && last.Do != "expect") || last.Until != "stable") {
+				settled, _ = r.settle(ctx, settleTimeout, nil)
 			}
 			if lookErr != nil {
 				text += "\nno observation: " + lookErr.Error()
@@ -311,27 +346,55 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 		Name: "lessons",
 		Description: "Read or record lessons for one app: what slowed the work down and what worked. " +
 			"Read them before planning in that app. Add one when a task was slow, a failure repeated, or a server hint says the loop is inefficient. " +
-			"Also returns this session's counters. Lessons stay on this Mac; never record passwords, personal text or window contents.",
+			"At the end of a task, call it with done: it records what the task cost under the current lessons, and says when the lessons are due for a review. " +
+			"Use app all for rules that hold in every app. " +
+			"Also returns the recent tasks, the cost per lessons version, and this session's counters. Lessons stay on this Mac; never record passwords, personal text or window contents.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in lessonArgs) (*mcp.CallToolResult, lessonReport, error) {
 		var lines []string
+		var version int
 		var err error
 		switch {
 		case in.Set != nil:
-			for _, l := range in.Set {
-				if l = strings.Join(strings.Fields(l), " "); l != "" {
-					lines = append(lines, l)
-				}
-			}
-			err = writeLessons(in.App, lines)
+			lines, version, err = setLessons(in.App, in.Set)
 		case in.Add != "":
-			lines, err = addLesson(in.App, in.Add)
+			lines, version, err = addLesson(in.App, in.Add)
 		default:
-			lines, err = readLessons(in.App)
+			lines, version, err = readLessons(in.App)
 		}
 		if err != nil {
 			return nil, lessonReport{}, err
 		}
-		return nil, lessonReport{App: in.App, Lessons: lines, Stats: st.snapshot()}, nil
+		out := lessonReport{App: in.App, Version: version, Lessons: lines}
+		var tasks []task
+		if in.Done != "" {
+			if len(in.Done) > 120 {
+				return nil, lessonReport{}, fmt.Errorf("keep done under 120 characters, and generic")
+			}
+			t := st.finish(strings.Join(strings.Fields(in.Done), " "), version)
+			if tasks, err = addTask(in.App, t); err != nil {
+				return nil, lessonReport{}, err
+			}
+			if !strings.EqualFold(in.App, globalApp) { // the rules for every app are judged by every task
+				_, gv, _ := readLessons(globalApp)
+				t.Version = gv
+				if all, err := addTask(globalApp, t); err == nil {
+					if r := review(globalApp, gv, all); r != "" {
+						out.Review = r + "\n"
+					}
+				}
+			}
+			out.Review = review(in.App, version, tasks) + "\n" + out.Review
+		} else {
+			if tasks, err = readTasks(in.App); err != nil {
+				return nil, lessonReport{}, err
+			}
+			out.Review = review(in.App, version, tasks) // a review due at the end of an earlier session
+		}
+		out.Review = strings.TrimSpace(out.Review)
+		out.Versions = byVersion(tasks)
+		out.Tasks = tasks[max(0, len(tasks)-10):]
+		out.Stats = st.snapshot()
+		return nil, out, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -373,6 +436,14 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 		}
 		out := info(scr, e, sh)
 		note := out.note()
+		if req.Base == nil && sh.Window != 0 {
+			if rs, _ := readRecipes(sh.App); len(rs) > 0 {
+				note += "\nSaved recipes for " + sh.App + " (run one with act: recipe, args, shot " + fmt.Sprint(sh.ID) + "):"
+				for _, rc := range rs {
+					note += "\n- " + rc.summary()
+				}
+			}
+		}
 		if hint := st.shot(req.Base != nil); hint != "" {
 			note += "\n" + hint
 		}
@@ -388,10 +459,92 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 			"Plan from one shot: chain every step whose target you can already see (click a field, type, press a key), " +
 			"and end the sequence where the next target only appears after the screen changes. " +
 			"Use wait_for (change or stable) after steps that open, load or animate something. " +
+			"To chain past a change you can predict, put an expect step there (until change, optionally a region where it shows): " +
+			"if the screen does not change as predicted, the sequence stops before the next steps. " +
+			"recipe runs a saved recipe of the shot's app (see recipes). " +
 			"The sequence stops at the first failure, or when the person moves the mouse.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in actArgs) (*mcp.CallToolResult, actReport, error) {
 		observe := in.Observe == nil || *in.Observe
-		return do(ctx, in.Steps, in.Shot, observe, in.Width, true, in.Mode)
+		steps := in.Steps
+		var app string
+		if in.Recipe != "" {
+			sh, err := reg.get(in.Shot)
+			if err != nil {
+				return nil, actReport{}, err
+			}
+			rc, err := findRecipe(sh.App, in.Recipe)
+			if err != nil {
+				return nil, actReport{}, err
+			}
+			pre, err := rc.expand(sh, in.Args)
+			if err != nil {
+				return nil, actReport{}, err
+			}
+			steps, app = append(pre, steps...), sh.App
+		}
+		res, rep, err := do(ctx, steps, in.Shot, observe, in.Width, true, in.Mode)
+		if err != nil || res == nil {
+			return res, rep, err
+		}
+		hint := ""
+		switch {
+		case app != "":
+			st.predicted(0, 0, true)
+			countRun(app, in.Recipe, rep.Error != "")
+			if rep.Error != "" {
+				hint = "Recipe " + in.Recipe + " failed. If the app changed, fix it with recipes (save, same name) or delete it."
+			}
+		case rep.Error == "" && actions(steps) >= 3:
+			if sh, err := reg.get(in.Shot); err == nil && sh.Window != 0 {
+				hint = st.saveHint(sh.App)
+			}
+		}
+		if hint != "" {
+			res.Content = append(res.Content, &mcp.TextContent{Text: hint})
+		}
+		return res, rep, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "recipes",
+		Description: "List, save or delete recipes: sequences that worked in an app, saved so the same situation next time is one act call. " +
+			"Save right after an act sequence succeeded and will likely recur: pass the same steps and shot, a name, and when (the situation). " +
+			"Typed text becomes {{textN}} placeholders filled with args at run time. A recipe runs only on a window of the size it was saved at. " +
+			"Screenshots of an app list its recipes. Recipes stay on this Mac.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in recipeArgs) (*mcp.CallToolResult, recipeReport, error) {
+		app := in.App
+		switch {
+		case in.Save != "":
+			rc, sh, err := newRecipe(reg, in.Save, in.When, in.Steps, in.Shot, in.KeepText)
+			if err != nil {
+				return nil, recipeReport{}, err
+			}
+			rs, err := saveRecipe(sh.App, rc)
+			if err != nil {
+				return nil, recipeReport{}, err
+			}
+			return nil, recipeReport{App: sh.App, Recipes: rs}, nil
+		case in.Delete != "":
+			rs, err := readRecipes(app)
+			if err != nil {
+				return nil, recipeReport{}, err
+			}
+			kept := rs[:0]
+			for _, r := range rs {
+				if r.Name != in.Delete {
+					kept = append(kept, r)
+				}
+			}
+			if len(kept) == len(rs) {
+				return nil, recipeReport{}, fmt.Errorf("no recipe %q for %s", in.Delete, app)
+			}
+			return nil, recipeReport{App: app, Recipes: kept}, writeRecipes(app, kept)
+		}
+		rs, err := readRecipes(app)
+		if err != nil {
+			return nil, recipeReport{}, err
+		}
+		return nil, recipeReport{App: app, Recipes: rs}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -470,4 +623,17 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 	})
 
 	return s
+}
+
+// actions counts the steps that act on the app, not waits or checks.
+func actions(steps []step) int {
+	n := 0
+	for _, s := range steps {
+		switch s.Do {
+		case "wait", "wait_for", "expect":
+		default:
+			n++
+		}
+	}
+	return n
 }

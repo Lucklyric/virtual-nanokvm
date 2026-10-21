@@ -21,19 +21,20 @@ const (
 
 // step is one action in a sequence. Coordinates are pixels of a shot.
 type step struct {
-	Do    string   `json:"do" jsonschema:"move, click, double_click, right_click, drag, scroll, type, key, hold, menu, wait or wait_for"`
-	Shot  int      `json:"shot,omitempty" jsonschema:"shot id the x, y come from (defaults to the sequence's shot)"`
-	X     *float64 `json:"x,omitempty" jsonschema:"pixel x in that shot; move, drag: required; clicks: move here first, omit to click in place"`
-	Y     *float64 `json:"y,omitempty" jsonschema:"pixel y in that shot"`
-	Size  float64  `json:"size,omitempty" jsonschema:"rough target size in that shot's pixels; small targets get a slower, careful approach"`
-	Text  string   `json:"text,omitempty" jsonschema:"type: the text (US keyboard characters)"`
-	WPM   float64  `json:"wpm,omitempty" jsonschema:"type: words per minute (default 70)"`
-	Keys  string   `json:"keys,omitempty" jsonschema:"key: a key or combination, e.g. enter, cmd+a, cmd+shift+4; hold: keys held together, separated by spaces, e.g. w or up right"`
-	Menu  string   `json:"menu,omitempty" jsonschema:"menu: a menu bar path of the shot's app, e.g. Edit > Select All (works in background, where cmd shortcuts do not arrive)"`
-	DX    int      `json:"dx,omitempty" jsonschema:"scroll: wheel notches, positive scrolls right"`
-	DY    int      `json:"dy,omitempty" jsonschema:"scroll: wheel notches, positive scrolls down"`
-	MS    int      `json:"ms,omitempty" jsonschema:"wait: milliseconds; hold: how long to hold the keys; wait_for: timeout (default 3000, max 15000)"`
-	Until string   `json:"until,omitempty" jsonschema:"wait_for: change (the screen changed since before the previous step) or stable (it stopped moving)"`
+	Do     string    `json:"do" jsonschema:"move, click, double_click, right_click, drag, scroll, type, key, hold, menu, wait, wait_for or expect"`
+	Shot   int       `json:"shot,omitempty" jsonschema:"shot id the x, y come from (defaults to the sequence's shot)"`
+	X      *float64  `json:"x,omitempty" jsonschema:"pixel x in that shot; move, drag: required; clicks: move here first, omit to click in place"`
+	Y      *float64  `json:"y,omitempty" jsonschema:"pixel y in that shot"`
+	Size   float64   `json:"size,omitempty" jsonschema:"rough target size in that shot's pixels; small targets get a slower, careful approach"`
+	Text   string    `json:"text,omitempty" jsonschema:"type: the text (US keyboard characters)"`
+	WPM    float64   `json:"wpm,omitempty" jsonschema:"type: words per minute (default 70)"`
+	Keys   string    `json:"keys,omitempty" jsonschema:"key: a key or combination, e.g. enter, cmd+a, cmd+shift+4; hold: keys held together, separated by spaces, e.g. w or up right"`
+	Menu   string    `json:"menu,omitempty" jsonschema:"menu: a menu bar path of the shot's app, e.g. Edit > Select All (works in background, where cmd shortcuts do not arrive)"`
+	DX     int       `json:"dx,omitempty" jsonschema:"scroll: wheel notches, positive scrolls right"`
+	DY     int       `json:"dy,omitempty" jsonschema:"scroll: wheel notches, positive scrolls down"`
+	MS     int       `json:"ms,omitempty" jsonschema:"wait: milliseconds; hold: how long to hold the keys; wait_for, expect: timeout (default 3000, max 15000)"`
+	Until  string    `json:"until,omitempty" jsonschema:"wait_for, expect: change (the screen changed since before the previous step) or stable (it stopped moving)"`
+	Region []float64 `json:"region,omitempty" jsonschema:"wait_for, expect: watch only this x, y, width, height in the shot's pixels"`
 }
 
 // Background acts on one app without the cursor: controls are pressed
@@ -57,6 +58,8 @@ type runner struct {
 	last *shot      // shot of the last coordinate step, for the observation
 	bg   Background // set in background mode
 	ax   Background // Accessibility, for menus in either mode; may be nil
+
+	expects, misses int // expect steps run, and those whose prediction failed
 }
 
 // validate checks a sequence before anything moves, so a typo in step 5
@@ -135,12 +138,23 @@ func (r *runner) validate(steps []step, defShot int) error {
 			if s.Menu == "" {
 				return fmt.Errorf("%s: needs menu, e.g. Edit > Select All", where)
 			}
-		case "wait_for":
+		case "wait_for", "expect":
 			if s.Until != "change" && s.Until != "stable" {
 				return fmt.Errorf("%s: until must be change or stable", where)
 			}
 			if s.MS < 0 || s.MS > 15000 {
 				return fmt.Errorf("%s: ms must be at most 15000", where)
+			}
+			if i == 0 && s.Until == "change" {
+				return fmt.Errorf("%s: a change is watched from before the step ahead of it; put the action first", where)
+			}
+			if len(s.Region) != 0 {
+				if len(s.Region) != 4 || s.Region[2] <= 0 || s.Region[3] <= 0 {
+					return fmt.Errorf("%s: region is [x, y, width, height] in the shot's pixels", where)
+				}
+				if _, err := r.reg.get(s.Shot); err != nil {
+					return fmt.Errorf("%s: %v", where, err)
+				}
 			}
 		default:
 			return fmt.Errorf("%s: unknown action", where)
@@ -163,7 +177,7 @@ func (r *runner) run(ctx context.Context, steps []step) ([]string, error) {
 	var done []string
 	var before []byte // preview taken before the previous action, for wait_for change
 	for i, s := range steps {
-		if i+1 < len(steps) && steps[i+1].Do == "wait_for" && steps[i+1].Until == "change" {
+		if i+1 < len(steps) && (steps[i+1].Do == "wait_for" || steps[i+1].Do == "expect") && steps[i+1].Until == "change" {
 			before, _, _ = r.peek(context.Background())
 		}
 		line, err := r.one(ctx, s, before)
@@ -235,19 +249,8 @@ func (r *runner) one(ctx context.Context, s step, before []byte) (string, error)
 		return fmt.Sprintf(" %s for %d ms", s.Keys, s.MS), r.e.Hold(ctx, s.Keys, time.Duration(s.MS)*time.Millisecond)
 	case "menu":
 		return r.menu(s.Menu)
-	case "wait":
-		return fmt.Sprintf(" %d ms", s.MS), sleep(ctx, time.Duration(s.MS)*time.Millisecond)
-	case "wait_for":
-		timeout := 3 * time.Second
-		if s.MS > 0 {
-			timeout = time.Duration(s.MS) * time.Millisecond
-		}
-		if s.Until == "stable" {
-			return r.settle(ctx, timeout), nil
-		}
-		return r.waitChange(ctx, before, timeout), nil
 	}
-	return "", fmt.Errorf("unknown action %q", s.Do)
+	return r.one2(ctx, s, before)
 }
 
 // background runs one step on the app of the current shot, without the cursor.
@@ -315,22 +318,68 @@ func (r *runner) menu(path string) (string, error) {
 	return " " + path, r.ax.Menu(sh.PID, path)
 }
 
-// one2 runs the steps that are the same in both modes: wait and wait_for.
+// one2 runs the steps that are the same in both modes: wait, wait_for and
+// expect. expect is a wait_for that stops the sequence when the predicted
+// change does not come, so the steps planned after it never run on a wrong
+// screen.
 func (r *runner) one2(ctx context.Context, s step, before []byte) (string, error) {
 	switch s.Do {
 	case "wait":
 		return fmt.Sprintf(" %d ms", s.MS), sleep(ctx, time.Duration(s.MS)*time.Millisecond)
-	case "wait_for":
+	case "wait_for", "expect":
 		timeout := 3 * time.Second
 		if s.MS > 0 {
 			timeout = time.Duration(s.MS) * time.Millisecond
 		}
-		if s.Until == "stable" {
-			return r.settle(ctx, timeout), nil
+		var region *[4]float64
+		if len(s.Region) == 4 {
+			a, err := r.regionArea(s)
+			if err != nil {
+				return "", err
+			}
+			region = &a
 		}
-		return r.waitChange(ctx, before, timeout), nil
+		var line string
+		var ok bool
+		if s.Until == "stable" {
+			line, ok = r.settle(ctx, timeout, region)
+		} else {
+			line, ok = r.waitChange(ctx, before, timeout, region)
+		}
+		if s.Do == "expect" {
+			r.expects++
+			if !ok {
+				r.misses++
+				return line, fmt.Errorf("prediction missed: %s", strings.TrimSpace(strings.Trim(line, " ()")))
+			}
+		}
+		return line, nil
 	}
-	return "", fmt.Errorf("%s is not available in background mode", s.Do)
+	if r.bg != nil {
+		return "", fmt.Errorf("%s is not available in background mode", s.Do)
+	}
+	return "", fmt.Errorf("unknown action %q", s.Do)
+}
+
+// regionArea maps a step's region (pixels of its shot) to fractions of what
+// peek watches: the main display in the foreground, the window in the
+// background.
+func (r *runner) regionArea(s step) ([4]float64, error) {
+	sh, err := r.reg.get(s.Shot)
+	if err != nil {
+		return [4]float64{}, err
+	}
+	ox, oy, _, err := frameNow(r.scr, sh)
+	if err != nil {
+		return [4]float64{}, err
+	}
+	x, y := sh.QX+s.Region[0]*sh.Scale, sh.QY+s.Region[1]*sh.Scale // frame points
+	w, h := s.Region[2]*sh.Scale, s.Region[3]*sh.Scale
+	if r.bg != nil {
+		return [4]float64{x / sh.FW, y / sh.FH, w / sh.FW, h / sh.FH}, nil
+	}
+	dw, dh := r.scr.Bounds()
+	return [4]float64{(ox + x) / dw, (oy + y) / dh, w / dw, h / dh}, nil
 }
 
 // peek is a small, fast picture of what the agent is looking at, to see
@@ -383,16 +432,21 @@ func (r *runner) area() ([4]float64, bool) {
 	return [4]float64{x0 / dw, y0 / dh, (x1 - x0) / dw, (y1 - y0) / dh}, true
 }
 
-// settle waits until the screen stops moving, or timeout.
-func (r *runner) settle(ctx context.Context, timeout time.Duration) string {
+// settle waits until the screen (or region, fractions of what peek watches)
+// stops moving, or timeout. ok is false when it was still moving, or could
+// not be watched.
+func (r *runner) settle(ctx context.Context, timeout time.Duration, region *[4]float64) (string, bool) {
 	start := time.Now()
 	if err := sleep(ctx, 120*time.Millisecond); err != nil {
-		return ""
+		return "", false
 	}
 	prev, area, ok := r.peek(ctx)
 	if !ok {
 		sleep(ctx, 300*time.Millisecond)
-		return " (could not watch this window: waited 400 ms)"
+		return " (could not watch this window: waited 400 ms)", false
+	}
+	if region != nil {
+		area = *region
 	}
 	for time.Since(start) < timeout {
 		if sleep(ctx, 100*time.Millisecond) != nil {
@@ -400,36 +454,42 @@ func (r *runner) settle(ctx context.Context, timeout time.Duration) string {
 		}
 		cur, _, ok := r.peek(ctx)
 		if !ok {
-			return " (could not watch this window: waited)"
+			return " (could not watch this window: waited)", false
 		}
 		if n, _ := changed(prev, cur, area); n < stillPixels {
-			return fmt.Sprintf(" (still after %d ms)", time.Since(start).Milliseconds())
+			return fmt.Sprintf(" (still after %d ms)", time.Since(start).Milliseconds()), true
 		}
 		prev = cur
 	}
-	return fmt.Sprintf(" (still moving after %d ms)", timeout.Milliseconds())
+	return fmt.Sprintf(" (still moving after %d ms)", timeout.Milliseconds()), false
 }
 
-// waitChange waits until the screen differs from before, or timeout.
-func (r *runner) waitChange(ctx context.Context, before []byte, timeout time.Duration) string {
+// waitChange waits until the screen (or region) differs from before, or
+// timeout. ok is false when nothing changed, or it could not be watched.
+func (r *runner) waitChange(ctx context.Context, before []byte, timeout time.Duration, region *[4]float64) (string, bool) {
 	start := time.Now()
 	if before == nil {
 		sleep(ctx, 500*time.Millisecond)
-		return " (cannot watch this window: waited 500 ms)"
+		return " (cannot watch this window: waited 500 ms)", false
 	}
 	for time.Since(start) < timeout {
 		cur, area, ok := r.peek(ctx)
 		if !ok {
 			break
 		}
-		if n, _ := changed(before, cur, area); n > changePixels {
-			return fmt.Sprintf(" (changed after %d ms)", time.Since(start).Milliseconds())
+		need := changePixels
+		if region != nil {
+			area = *region
+			need = min(need, regionPixels(cur, area)/8) // a small region: an eighth of it is a change
+		}
+		if n, _ := changed(before, cur, area); n > need {
+			return fmt.Sprintf(" (changed after %d ms)", time.Since(start).Milliseconds()), true
 		}
 		if sleep(ctx, 80*time.Millisecond) != nil {
 			break
 		}
 	}
-	return fmt.Sprintf(" (no change within %d ms)", timeout.Milliseconds())
+	return fmt.Sprintf(" (no change within %d ms)", timeout.Milliseconds()), false
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

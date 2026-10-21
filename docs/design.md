@@ -111,6 +111,16 @@ Typing presses shift before a shifted key. Each key is held 40–95 ms. Gaps bet
 
 The server counts shots, zooms, single-action calls, `act` calls, steps and failures by kind. When a loop looks slow (three looks without an action, three single actions in a row, the same failure twice), it adds one `Efficiency:` line to the tool result. The skill then records a lesson with `lessons`: one line per app, newest 40 kept, in `~/.config/vnkvm/lessons/<app>.md` (`VNKVM_LESSONS_DIR` overrides), outside the plugin and the source checkout so updates keep them. The skill reads an app's lessons before planning there, and never records personal text or window contents.
 
+Lessons are versioned so they can be judged. Every `add` or `set` bumps the version in the file header, and each line carries the version that added it (`v3 2026-10-21: ...`). At the end of a task the agent calls `lessons` with `done`. The server then appends a record to `<app>.tasks.jsonl` (newest 50) with the counter delta since the previous task: tool calls (counted by middleware on every `tools/call`), shots, `act` calls, steps, failures, `expect` hits and misses, recipe runs. The same record goes to the `all` log with the version of the cross-app rules. A `lessons` read returns the recent tasks and the average cost per version. The server asks for a revision every fifth task on one version, and when the current version averages over 25% more tool calls per task than the previous version with at least three tasks. The agent revises; the server only supplies the numbers.
+
+### Predictions
+
+`expect` is a `wait_for` that stops the sequence when it times out. It watches the whole frame or a `region` of the shot (mapped to the preview the same way as the frame; in a small region an eighth of its preview pixels counts as a change). An agent can chain past a change it predicts, and a wrong prediction costs one observation instead of clicks on the wrong screen.
+
+### Recipes
+
+`recipes` saves a sequence the agent sent to `act`, converted from shot pixels to window points, with the window size. `act` with `recipe` converts it back to the pixels of a fresh whole-window shot and runs it through the usual validation, so covered points and background limits apply as before. A window of another size is refused, since its content has reflowed. Typed text becomes `{{textN}}` placeholders unless the agent marks it as fixed, so recipes hold no personal text. Recipes live in `<app>.recipes.json` next to the lessons (newest 30), with run and failure counts. A new whole-window screenshot lists the app's recipes, so the agent sees them when it plans.
+
 ### Shots and coordinates
 
 The model's turns, not vnkvm, set the pace of an agent: each turn takes seconds, each action about one. So the tools aim at fewer turns: a cheap first look, zoom only where needed, several actions per turn, and the next look returned with the actions.
@@ -175,5 +185,6 @@ Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds 
 - **v2.1**: H.264 (VideoToolbox → WebCodecs) with MJPEG fallback, Tailscale sharing with HTTPS via `tailscale serve`, one-line installer, `doctor`.
 - **v2.2**: shot ids, low-detail first looks with zoom and aim marks, `act` sequences with settle and change detection, and a skill that teaches the agent to plan sequences.
 - **v2.3**: app-only screenshots by default, titles hidden for other apps, per-app lessons with efficiency hints.
-- **v2.4 (this)**: background mode through Accessibility and per-app events, `hold` and `menu` steps, foreground speed and game guidance in the skill.
+- **v2.4**: background mode through Accessibility and per-app events, `hold` and `menu` steps, foreground speed and game guidance in the skill.
+- **v2.5 (this)**: `expect` steps to chain past predicted changes, saved recipes, versioned lessons measured per task with server-prompted reviews.
 - **v3**: launchd units for the bridge and daemon, full-display capture of secondary screens (windows on any screen already work), and Linux (USB gadget on `dummy_hcd` or USB/IP) and Windows targets.

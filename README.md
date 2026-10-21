@@ -71,10 +71,11 @@ virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 | Tool | Does |
 |---|---|
 | `screenshot` | A low-detail look at the screen or one app window (even when covered), or a sharp zoom of part of an earlier shot, optionally with a crosshair where a click would land |
-| `act` | Up to 20 planned actions in one call (move, click, type, key, hold, menu, scroll, drag, wait), then a new low-detail look once the screen settles |
+| `act` | Up to 20 planned actions in one call (move, click, type, key, hold, menu, scroll, drag, wait, expect), or a saved recipe, then a new low-detail look once the screen settles |
 | `list_windows` | App windows with ids and positions |
 | `mouse_move`, `click`, `drag`, `scroll`, `type_text`, `key` | Single actions, with an optional look afterwards |
-| `lessons` | Per-app notes on what made a task slow and what worked, kept on this Mac |
+| `lessons` | Per-app rules on what made tasks slow and what worked, versioned and measured per task, kept on this Mac |
+| `recipes` | Saved sequences that worked in an app, replayed with one `act` call, kept on this Mac |
 | `cursor_position` | Where the cursor is |
 | `doctor` | Checks permissions, display, driver input and Tailscale |
 
@@ -98,6 +99,12 @@ Background mode cannot right-click (macOS brings the app forward for a context m
 Screenshots cover one app's window, never the whole display, unless you allow it with `VNKVM_ALLOW_DISPLAY=1`. `list_windows` shows window titles only for the app the agent names.
 
 The bundled skill teaches the agent to plan: look once, chain every step it can already see into one `act` call, prefer keyboard shortcuts, and stop the sequence where the next target only appears after the screen changes. One model turn then covers several actions. When the server sees a slow loop (looks without actions, single actions in a row, a repeated failure), it says so in the tool result, and the agent records a one-line lesson for that app in `~/.config/vnkvm/lessons/`. The next task in that app starts by reading it.
+
+The agent gets faster with use in three ways:
+
+- **Predictions.** An `expect` step lets the agent chain past a screen change it can predict (a menu opening, a dialog appearing). If the change does not come, the sequence stops before the next steps.
+- **Recipes.** A sequence that worked can be saved and replayed in one call. Recipes store window-relative positions and never the typed text, which becomes a placeholder. Screenshots of an app list its recipes.
+- **Measured lessons.** At the end of each task the agent reports it done, and the server records what it cost (tool calls, steps per call, misses) under the current lessons version. Every fifth task, or when a new version makes tasks slower, the server asks the agent to revise the lessons. Each lesson is tagged with the version that added it, so a bad change can be traced and dropped.
 
 ### Watch and control from a browser
 

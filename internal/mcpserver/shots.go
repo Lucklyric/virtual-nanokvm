@@ -26,17 +26,16 @@ const (
 // origin + q.min + (px + 0.5, py + 0.5) × scale, where origin is the frame's
 // current position (a window may have moved since).
 type shot struct {
-	ID       int
-	Window   uint32  // 0: main display
-	App      string  // window's app, for messages
-	FW, FH   float64 // frame size in points when taken
-	QX, QY   float64 // region origin within the frame, points
-	QW, QH   float64 // region size, points
-	W, H     int     // image size, pixels
-	Scale    float64 // points per image pixel
-	FX, FY   float64 // frame origin when taken, global points
-	Cropped  bool
-	Captured image.Rectangle // raw capture pixels used, for tests
+	ID      int
+	Window  uint32  // 0: main display
+	App     string  // window's app, for messages
+	FW, FH  float64 // frame size in points when taken
+	QX, QY  float64 // region origin within the frame, points
+	QW, QH  float64 // region size, points
+	W, H    int     // image size, pixels
+	Scale   float64 // points per image pixel
+	FX, FY  float64 // frame origin when taken, global points
+	Cropped bool
 }
 
 type shots struct {
@@ -125,11 +124,15 @@ func aim(scr Screen, sh *shot, x, y float64) (human.Point, error) {
 	return p, nil
 }
 
-// pixelOf maps a global point back to a pixel of the shot, assuming the frame
-// sits where it was when the shot was taken. ok is false outside the image.
-func pixelOf(sh *shot, p human.Point) (position, bool) {
-	px := math.Floor((p.X - sh.FX - sh.QX) / sh.Scale)
-	py := math.Floor((p.Y - sh.FY - sh.QY) / sh.Scale)
+// pixelOf maps a global point back to a pixel of the shot, with the frame
+// where it is now. ok is false outside the image or when the frame changed.
+func pixelOf(scr Screen, sh *shot, p human.Point) (position, bool) {
+	ox, oy, _, err := frameNow(scr, sh)
+	if err != nil {
+		return position{}, false
+	}
+	px := math.Floor((p.X - ox - sh.QX) / sh.Scale)
+	py := math.Floor((p.Y - oy - sh.QY) / sh.Scale)
 	return position{px, py}, px >= 0 && py >= 0 && px < float64(sh.W) && py < float64(sh.H)
 }
 
@@ -200,7 +203,6 @@ func take(ctx context.Context, scr Screen, reg *shots, req shotRequest) (*shot, 
 	// The region in points, exactly as cropped.
 	sh.QX, sh.QY = float64(crop.Min.X-rb.Min.X)/k, float64(crop.Min.Y-rb.Min.Y)/k
 	sh.QW, sh.QH = float64(crop.Dx())/k, float64(crop.Dy())/k
-	sh.Captured = crop
 
 	width := req.Width
 	if width <= 0 {

@@ -105,7 +105,7 @@ func TestZoomRoundTrip(t *testing.T) {
 	// A target read in the low shot and the same target read in the zoom
 	// land within one low pixel of each other.
 	g, _ := toGlobal(scr, low, 576, 288)
-	px, ok := pixelOf(zoom, g)
+	px, ok := pixelOf(scr, zoom, g)
 	if !ok {
 		t.Fatalf("global %v is not inside the zoom", g)
 	}
@@ -184,7 +184,7 @@ func TestMarkLandsOnTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	g, _ := toGlobal(scr, low, 300, 200)
-	c, _ := pixelOf(zoom, g)
+	c, _ := pixelOf(scr, zoom, g)
 	// The red arm sits 8 px right of the target; the target itself stays clear.
 	r, gg, b, _ := img.At(int(c.X)+8, int(c.Y)).RGBA()
 	if r>>8 < 180 || gg>>8 > 90 || b>>8 > 90 {

@@ -59,7 +59,7 @@ func info(scr Screen, e *human.Engine, sh *shot) shotInfo {
 		in.Frame = "window"
 	}
 	if p, err := e.Cursor.Position(); err == nil {
-		if px, ok := pixelOf(sh, p); ok {
+		if px, ok := pixelOf(scr, sh, p); ok {
 			in.Cursor = &px
 		}
 	}
@@ -211,7 +211,7 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 				}
 			}
 			settled := ""
-			if steps[len(steps)-1].Do != "wait_for" {
+			if last := steps[len(steps)-1]; last.Do != "wait_for" || last.Until != "stable" {
 				settled = r.settle(ctx, settleTimeout)
 			}
 			if sh, img, err := take(ctx, scr, reg, req); err == nil {
@@ -313,7 +313,7 @@ func New(e *human.Engine, scr Screen, bridgeSocket string) *mcp.Server {
 		}
 		if sh != nil {
 			out.Shot = sh.ID
-			if px, ok := pixelOf(sh, p); ok {
+			if px, ok := pixelOf(scr, sh, p); ok {
 				out.Pixel = &px
 			}
 		}

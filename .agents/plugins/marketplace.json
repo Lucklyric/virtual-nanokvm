@@ -1,0 +1,12 @@
+{
+  "name": "virtual-nanokvm",
+  "interface": { "displayName": "virtual-nanokvm" },
+  "plugins": [
+    {
+      "name": "vnkvm",
+      "source": { "source": "local", "path": "./" },
+      "policy": { "installation": "AVAILABLE" },
+      "category": "Productivity"
+    }
+  ]
+}

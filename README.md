@@ -31,23 +31,33 @@ A move never jumps. Every move is randomized:
 
 ![Speed over time](docs/img/speed-profile.svg)
 
-Clicks, scrolling and typing get human timing too. If you grab the mouse mid-action, vnkvm stops, releases every key and button, and reports `user took control`.
+Around the target, behavior varies too. Some moves overshoot and come back, some fall short and finish with a second stroke, and long ones sometimes detour. Before a click the hand dwells, sometimes longer, sometimes with a tiny wobble. After a click it often drifts a few points away. Clicks, scrolling and typing get human timing too. If you grab the mouse mid-action, vnkvm stops, releases every key and button, and reports `user took control`.
 
-## Quick start
+## Install
 
-```sh
-make service          # builds bin/vnkvm
-bin/vnkvm move  --input sys 800 450
-bin/vnkvm click --input sys 800 450
-bin/vnkvm type  --input sys "hello"
+Needs macOS, Go and the Xcode command line tools. The MCP server builds itself on first start.
+
+**Claude Code**
+
+```
+/plugin marketplace add Lucklyric/virtual-nanokvm
+/plugin install vnkvm@virtual-nanokvm
 ```
 
-Give the terminal Accessibility permission on first run.
-
-### Use it from an AI agent (MCP)
+**Codex**
 
 ```sh
-claude mcp add vnkvm -- "$PWD/bin/vnkvm" mcp --input sys
+codex plugin marketplace add https://github.com/Lucklyric/virtual-nanokvm.git
+codex plugin add vnkvm@virtual-nanokvm
+```
+
+Both install the MCP server and a `vnkvm` skill that teaches the agent the screenshot → act → check loop. On first use, give the app running the agent **Accessibility** (to control input) and **Screen Recording** (for screenshots) permission. Set `VNKVM_INPUT=driver` to use the driver input instead of `sys`.
+
+**Any other MCP client**
+
+```sh
+git clone https://github.com/Lucklyric/virtual-nanokvm.git
+virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 ```
 
 | Tool | Does |
@@ -59,6 +69,15 @@ claude mcp add vnkvm -- "$PWD/bin/vnkvm" mcp --input sys
 | `cursor_position` | Where the cursor is |
 
 Each position comes back both **global** (whole desktop) and **relative** (pixels in the screenshot). The mouse tools accept coordinates straight from a window's screenshot.
+
+### Command line
+
+```sh
+make service
+bin/vnkvm move  --input sys 800 450
+bin/vnkvm click --input sys 800 450
+bin/vnkvm type  --input sys "hello"
+```
 
 ### Driver input (real USB HID)
 

@@ -1,0 +1,19 @@
+{
+  "name": "vnkvm",
+  "version": "0.1.0",
+  "description": "Use the Mac's mouse and keyboard like a person: human-like cursor paths, typing rhythm, screen and window screenshots, over MCP.",
+  "author": { "name": "Lucklyric" },
+  "homepage": "https://github.com/Lucklyric/virtual-nanokvm",
+  "repository": "https://github.com/Lucklyric/virtual-nanokvm",
+  "license": "MIT",
+  "keywords": ["mcp", "computer-use", "macos", "kvm", "mouse", "keyboard"],
+  "skills": "./skills/",
+  "mcpServers": "./.codex-mcp.json",
+  "interface": {
+    "displayName": "vnkvm",
+    "shortDescription": "Human-like mouse and keyboard control of macOS.",
+    "longDescription": "A software KVM for macOS. Moves the cursor along human-like paths, types with human rhythm, and captures the screen or a single app window, with both global and window-relative coordinates. Stops when you grab the mouse.",
+    "developerName": "Lucklyric",
+    "category": "Productivity"
+  }
+}

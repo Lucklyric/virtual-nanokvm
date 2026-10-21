@@ -1,0 +1,11 @@
+{
+  "name": "virtual-nanokvm",
+  "owner": { "name": "Lucklyric", "url": "https://github.com/Lucklyric" },
+  "plugins": [
+    {
+      "name": "vnkvm",
+      "source": "./",
+      "description": "Human-like mouse and keyboard control of macOS over MCP."
+    }
+  ]
+}

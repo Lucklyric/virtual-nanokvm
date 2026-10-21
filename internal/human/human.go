@@ -89,6 +89,12 @@ func sleep(ctx context.Context, d time.Duration) error {
 
 func (e *Engine) uniform(lo, hi float64) float64 { return lo + e.Rand.Float64()*(hi-lo) }
 
+// lognormal draws a duration around medianMS with spread sigma, the shape of
+// human reaction and dwell times (mostly short, sometimes long).
+func (e *Engine) lognormal(medianMS, sigma float64) time.Duration {
+	return time.Duration(medianMS * math.Exp(e.Rand.NormFloat64()*sigma) * float64(time.Millisecond))
+}
+
 func (e *Engine) pause(ctx context.Context, loMS, hiMS float64) error {
 	return e.Sleep(ctx, time.Duration(e.uniform(loMS, hiMS)*float64(time.Millisecond)))
 }
@@ -141,24 +147,56 @@ func (e *Engine) moveTo(ctx context.Context, target Point, targetSize float64) (
 	if targetSize <= 0 {
 		targetSize = 20
 	}
-	start, err := e.Cursor.Position()
-	if err != nil {
+	if err := e.hold(); err != nil {
 		return Point{}, err
 	}
+	start := e.anchor
 	dist := math.Hypot(target.X-start.X, target.Y-start.Y)
 	if dist < 0.5 {
 		return start, nil
 	}
-
-	aim := target
-	if dist > 150 && e.Rand.Float64() < 0.7 {
-		ux, uy := (target.X-start.X)/dist, (target.Y-start.Y)/dist
-		over := dist * e.uniform(0.02, 0.06)
-		side := e.Rand.NormFloat64() * dist * 0.01
-		aim = Point{target.X + ux*over - uy*side, target.Y + uy*over + ux*side}
+	// Reaction time: the hand starts a moment after the decision.
+	if err := e.Sleep(ctx, e.lognormal(140, 0.35)); err != nil {
+		return Point{}, err
+	}
+	if err := e.still(); err != nil {
+		return Point{}, err
 	}
 
-	if err := e.segment(ctx, start, aim, e.fitts(dist, targetSize)); err != nil {
+	// Each move picks one way to approach the target, as people vary:
+	//   overshoot  the first stroke flies a little past, then comes back
+	//   undershoot the first stroke falls short, a second one finishes
+	//   detour     on long moves the hand bends through a point off the line
+	//   direct     one stroke straight onto the target
+	ux, uy := (target.X-start.X)/dist, (target.Y-start.Y)/dist
+	side := e.Rand.NormFloat64() * dist * 0.01
+	aim := target
+	var via *Point
+	switch r := e.Rand.Float64(); {
+	case dist > 400 && r < 0.12:
+		off := dist * e.uniform(0.12, 0.25)
+		if e.Rand.Float64() < 0.5 {
+			off = -off
+		}
+		at := e.uniform(0.4, 0.6)
+		via = &Point{start.X + ux*dist*at - uy*off, start.Y + uy*dist*at + ux*off}
+	case dist > 150 && r < 0.47:
+		over := dist * e.uniform(0.02, 0.06)
+		aim = Point{target.X + ux*over - uy*side, target.Y + uy*over + ux*side}
+	case dist > 60 && r < 0.75:
+		short := dist * e.uniform(0.05, 0.12)
+		aim = Point{target.X - ux*short - uy*side, target.Y - uy*short + ux*side}
+	}
+
+	from := start
+	if via != nil {
+		d := math.Hypot(via.X-start.X, via.Y-start.Y)
+		if err := e.segment(ctx, start, *via, e.fitts(d, targetSize)*3/4); err != nil {
+			return Point{}, err
+		}
+		from = *via
+	}
+	if err := e.segment(ctx, from, aim, e.fitts(math.Hypot(aim.X-from.X, aim.Y-from.Y), targetSize)); err != nil {
 		return Point{}, err
 	}
 	if aim != target {
@@ -374,7 +412,10 @@ func (e *Engine) Click(ctx context.Context, b Button, count int) error {
 }
 
 func (e *Engine) click(ctx context.Context, b Button, count int) error {
-	if err := e.hold(); err != nil {
+	if e.gain == 0 {
+		e.gain = 1
+	}
+	if err := e.hover(ctx); err != nil {
 		return err
 	}
 	for i := range count {
@@ -396,7 +437,59 @@ func (e *Engine) click(ctx context.Context, b Button, count int) error {
 			}
 		}
 	}
-	return nil
+	return e.relax(ctx)
+}
+
+// hover is the moment before a click: a dwell (mostly short, sometimes a
+// longer look), and now and then a tiny wobble off the spot and back.
+func (e *Engine) hover(ctx context.Context) error {
+	if err := e.hold(); err != nil {
+		return err
+	}
+	dwell := e.lognormal(130, 0.5)
+	if e.Rand.Float64() < 0.15 {
+		dwell += e.lognormal(350, 0.4) // reading the label before committing
+	}
+	if e.Rand.Float64() < 0.25 {
+		spot := e.anchor
+		a := e.uniform(0, 2*math.Pi)
+		r := e.uniform(1, 2.5)
+		off := Point{spot.X + r*math.Cos(a), spot.Y + r*math.Sin(a)}
+		if err := e.segment(ctx, spot, off, e.lognormal(70, 0.3)); err != nil {
+			return err
+		}
+		if err := e.segment(ctx, off, spot, e.lognormal(70, 0.3)); err != nil {
+			return err
+		}
+		if _, err := e.settle(ctx, spot); err != nil {
+			return err
+		}
+		if err := e.hold(); err != nil {
+			return err
+		}
+	}
+	if err := e.Sleep(ctx, dwell); err != nil {
+		return err
+	}
+	return e.still()
+}
+
+// relax is the hand after a click: often it drifts a few points away as the
+// finger lifts, sometimes it stays put.
+func (e *Engine) relax(ctx context.Context) error {
+	if e.Rand.Float64() >= 0.45 {
+		return nil
+	}
+	if err := e.pause(ctx, 40, 140); err != nil {
+		return err
+	}
+	if err := e.hold(); err != nil {
+		return err
+	}
+	a := e.uniform(0, 2*math.Pi)
+	r := e.uniform(3, 12)
+	to := Point{e.anchor.X + r*math.Cos(a), e.anchor.Y + r*math.Sin(a)}
+	return e.segment(ctx, e.anchor, to, e.lognormal(180, 0.3))
 }
 
 func (e *Engine) press(ctx context.Context, b Button) error {

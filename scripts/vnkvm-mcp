@@ -1,0 +1,19 @@
+#!/bin/sh
+# Launches the vnkvm MCP server, building it first when the binary is missing
+# or older than the source. Needs Go and the Xcode command line tools.
+#
+# VNKVM_INPUT picks the input path: sys (default, needs Accessibility) or
+# driver (virtual USB HID, needs the Karabiner driver and vnkvm-hid-bridge).
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+bin="$root/bin/vnkvm"
+
+if [ ! -x "$bin" ] || [ -n "$(find "$root/cmd" "$root/internal" "$root/go.mod" -newer "$bin" -name '*.go' -o -newer "$bin" -name go.mod 2>/dev/null | head -1)" ]; then
+	if ! command -v go >/dev/null 2>&1; then
+		echo "vnkvm: Go is required to build the server (brew install go)" >&2
+		exit 1
+	fi
+	(cd "$root" && go build -o "$bin" ./cmd/vnkvm) >&2
+fi
+
+exec "$bin" mcp --input "${VNKVM_INPUT:-sys}" "$@"

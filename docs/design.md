@@ -63,10 +63,10 @@ A `MoveTo(target, size)` call:
 2. **Path** is a cubic Bézier curve bent to one side by 4–20% of the distance, like a wrist or elbow arc.
 3. **Speed** follows the minimum-jerk profile `s(τ) = 10τ³ − 15τ⁴ + 6τ⁵`. It starts slow, peaks mid-way, and ends slow.
 4. **Tremor** adds a small smoothed random jitter that fades out near the target.
-5. **Overshoot**: on 70% of moves longer than 150 points, the first stroke aims 2–6% past the target, pauses 30–90 ms, then makes a short corrective stroke.
+5. **Approach** is drawn per move. **Overshoot** (about 35% of moves over 150 points): the first stroke aims 2–6% past, pauses 30–90 ms, then corrects. **Undershoot** (about 28% of moves over 60 points): it stops 5–12% short, then a second stroke finishes. **Detour** (about 12% of moves over 400 points): it bends through a point off the line. Otherwise the move is **direct**. Every move starts after a log-normal reaction delay of about 140 ms.
 6. **Closed loop**: reports go out every 8 ms (a 125 Hz mouse). Each step combines feed-forward along the path with a gentle pull toward where the cursor should be. Because of pointer acceleration, the engine keeps a running estimate of points moved per report unit. A final settle phase makes half-error corrections until the cursor is within 1 point. If it is pinned at a screen edge, it reports an error.
 
-Clicks hold the button for 55–110 ms. A double click waits 70–130 ms between clicks. Drags press, pause, move, pause, and release. The button is released even when the move fails. Scrolling sends one notch at a time in short bursts with occasional longer breaks.
+Before a click the hand **hovers**: a log-normal dwell of about 130 ms, sometimes an extra look of about 350 ms, and in about 25% of clicks a 1–2.5 point wobble off the spot and back. The press always lands on the spot. After a click the hand often **relaxes**, drifting 3–12 points away in about 45% of clicks. Clicks hold the button for 55–110 ms. A double click waits 70–130 ms between clicks. Drags press, pause, move, pause, and release. The button is released even when the move fails. Scrolling sends one notch at a time in short bursts with occasional longer breaks.
 
 Every move is random, never a replayed trajectory. The engine is seeded randomly per process, and each move draws its own duration, bend, control points, overshoot and tremor. A test checks that 20 moves between the same two points differ.
 
@@ -96,6 +96,17 @@ Typing presses shift before a shifted key. Each key is held 40–95 ms. Gaps bet
 - **Relative:** pixels of a frame's screenshot. A frame is the main display (the default) or one window (`window_id` or `app`).
 - **Conversion:** `global = origin + pixel × scale`. Every screenshot returns its `origin` and `scale`. Locations come back with both `global` and `relative` (relative is left out when the point is outside the frame).
 - **Mouse tools take relative coordinates** for the frame they name, so an agent can act straight from a window screenshot. A window's bounds are read again at action time, so a window that has moved still works. A point that another window covers is refused, since the click would land on the other window.
+
+## Plugin packaging
+
+The repo is a plugin marketplace for both Claude Code and Codex. Both install straight from git.
+
+| Harness | Manifests | MCP config |
+|---|---|---|
+| Claude Code | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | `.mcp.json` (`${CLAUDE_PLUGIN_ROOT}/scripts/vnkvm-mcp`) |
+| Codex | `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json` | `.codex-mcp.json` (`cwd` = plugin root) |
+
+Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds `bin/vnkvm` on first start and rebuilds when the source is newer, then runs `vnkvm mcp --input ${VNKVM_INPUT:-sys}`.
 
 ## Setup (manual, once per machine)
 

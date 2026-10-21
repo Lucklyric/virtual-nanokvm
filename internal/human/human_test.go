@@ -284,3 +284,40 @@ func TestSmallTremorIsNotTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestClickBehaviorVaries(t *testing.T) {
+	// Across many clicks: the press always lands on the spot, while the
+	// hover wobble and the post-click drift show up only some of the time.
+	wobbles, drifts := 0, 0
+	for seed := uint64(1); seed <= 60; seed++ {
+		e, rec, scr := newSim(seed, Point{400, 300})
+		if err := e.Click(context.Background(), Left, 1); err != nil {
+			t.Fatal(err)
+		}
+		pressAt := -1
+		for i, r := range rec.Reports {
+			if r.Buttons != 0 {
+				pressAt = i
+				break
+			}
+		}
+		if pressAt > 0 {
+			wobbles++
+		}
+		if scr.visible != (Point{400, 300}) && math.Hypot(scr.pending.X-400, scr.pending.Y-300) >= 2 {
+			drifts++
+		}
+		// Replay up to the press to find where it happened.
+		x, y := 400.0, 300.0
+		for _, r := range rec.Reports[:pressAt] {
+			x += float64(r.DX) * (0.8 + scr.accel*math.Abs(float64(r.DX)))
+			y += float64(r.DY) * (0.8 + scr.accel*math.Abs(float64(r.DY)))
+		}
+		if math.Hypot(x-400, y-300) >= 1 {
+			t.Fatalf("seed %d: pressed at (%.1f, %.1f), not on the spot", seed, x, y)
+		}
+	}
+	if wobbles == 0 || wobbles == 60 || drifts == 0 || drifts == 60 {
+		t.Fatalf("behavior not random: %d/60 wobbles, %d/60 drifts", wobbles, drifts)
+	}
+}

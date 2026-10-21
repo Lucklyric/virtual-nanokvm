@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "vnkvm": {
+      "command": "/bin/sh",
+      "args": ["-c", "exec ./scripts/vnkvm-mcp \"$@\"", "--"],
+      "cwd": ".",
+      "env_vars": ["PATH", "HOME", "GOPATH", "GOCACHE", "GOMODCACHE", "VNKVM_INPUT"],
+      "startup_timeout_sec": 120
+    }
+  }
+}

@@ -41,7 +41,7 @@ For games that move with arrows or WASD, `hold` keeps keys down for a set time:
 ]}
 ```
 
-Keys held together are separated by spaces (`"up right"` walks diagonally). Holding is faster and more exact than many clicks once you know the walking speed.
+Keys held together are separated by spaces (`"up right"` walks diagonally). Holding is faster and more exact than many clicks once you know the walking speed. A held key sends one press and no auto-repeat: games that read whether a key is down keep walking, but a text field gets one character.
 
 ## Pick a target, act on it
 

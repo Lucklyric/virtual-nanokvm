@@ -41,7 +41,7 @@ type step struct {
 type Background interface {
 	// Act presses the control of app pid at global (x, y), focuses it when it
 	// is a text field, or opens its context menu. It describes what it did.
-	Act(pid int, x, y float64, menu bool) (string, error)
+	Act(ctx context.Context, pid int, x, y float64, menu bool) (string, error)
 	// Menu chooses a menu bar item of app pid, such as "Edit > Select All".
 	Menu(pid int, path string) error
 	// Engine returns an engine whose keyboard and wheel reach only app pid;
@@ -72,7 +72,10 @@ func (r *runner) validate(steps []step, defShot int) error {
 				s.Shot = defShot
 			}
 			if s.X != nil {
-				sh, _ = r.reg.get(s.Shot)
+				var err error
+				if sh, err = r.reg.get(s.Shot); err != nil {
+					return err
+				}
 			}
 			if sh != nil && sh.Window == 0 {
 				return fmt.Errorf("background mode works on one app: use a shot taken with app or window_id")
@@ -277,12 +280,16 @@ func (r *runner) background(ctx context.Context, s step, before []byte) (string,
 		if s.X == nil {
 			return "", fmt.Errorf("background clicks need x and y")
 		}
-		did, err := r.bg.Act(sh.PID, p.X, p.Y, s.Do == "right_click")
+		did, err := r.bg.Act(ctx, sh.PID, p.X, p.Y, s.Do == "right_click")
 		return at + ": " + did, err
 	case "scroll":
 		return fmt.Sprintf("%s dx %d dy %d", at, s.DX, s.DY), r.bg.Engine(sh.PID, p.X, p.Y).Scroll(ctx, s.DX, s.DY)
 	case "type":
-		return fmt.Sprintf(" %d characters", len(s.Text)), r.bg.Engine(sh.PID, p.X, p.Y).Type(ctx, s.Text, s.WPM)
+		wpm := s.WPM
+		if wpm == 0 {
+			wpm = 250 // nobody watches a background app type
+		}
+		return fmt.Sprintf(" %d characters", len(s.Text)), r.bg.Engine(sh.PID, p.X, p.Y).Type(ctx, s.Text, wpm)
 	case "key":
 		return " " + s.Keys, r.bg.Engine(sh.PID, p.X, p.Y).Press(ctx, s.Keys)
 	case "hold":

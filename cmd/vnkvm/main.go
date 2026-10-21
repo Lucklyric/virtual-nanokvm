@@ -78,7 +78,7 @@ type appBackground struct {
 	engine *human.Engine
 }
 
-func (b *appBackground) Act(pid int, x, y float64, menu bool) (string, error) {
+func (b *appBackground) Act(ctx context.Context, pid int, x, y float64, menu bool) (string, error) {
 	r, err := ax.Act(pid, x, y, menu)
 	what := r.Role
 	if r.Label != "" {
@@ -90,7 +90,7 @@ func (b *appBackground) Act(pid int, x, y float64, menu bool) (string, error) {
 	if r.Did == "key" {
 		// The control takes no press action (web content): it is focused,
 		// and a key triggers it, as for a keyboard user.
-		err := b.Engine(pid, x, y).Press(context.Background(), r.Key)
+		err := b.Engine(pid, x, y).Press(ctx, r.Key)
 		return "focused " + what + " and pressed " + r.Key, err
 	}
 	return r.Did + " " + what, nil

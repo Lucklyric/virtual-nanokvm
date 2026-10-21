@@ -124,7 +124,7 @@ func TestScreenshotsStayInOneApp(t *testing.T) {
 
 type fakeBackground struct{ calls []string }
 
-func (f *fakeBackground) Act(pid int, x, y float64, menu bool) (string, error) {
+func (f *fakeBackground) Act(_ context.Context, pid int, x, y float64, menu bool) (string, error) {
 	f.calls = append(f.calls, fmt.Sprintf("act %d %.0f %.0f %v", pid, x, y, menu))
 	return "pressed AXButton", nil
 }

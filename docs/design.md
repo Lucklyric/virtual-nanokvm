@@ -7,7 +7,7 @@ A software version of the [Sipeed NanoKVM-Go](https://sipeed.com/nanokvm-go). It
 - Input can arrive as a real USB HID device (driver input), so apps and the OS treat it like hardware. Synthetic system events (sys input) are the no-install alternative.
 - Mouse motion looks human: curved paths, natural speed, overshoot and correction. It never jumps.
 - Agents control the machine over MCP. People watch and control it from a browser on the local network.
-- Everything is local. No cloud relay.
+- Everything runs on the Mac itself.
 
 ## Architecture
 
@@ -100,7 +100,7 @@ Typing presses shift before a shifted key. Each key is held 40–95 ms. Gaps bet
 
 ## Browser viewer (`vnkvm serve`)
 
-- **Video, as on the NanoKVM: H.264 with an MJPEG fallback.**
+- **Video:** H.264 with an MJPEG fallback, as on the NanoKVM.
   - **H.264 (`/video`, WebSocket):** ScreenCaptureKit captures a frame (`captureSampleBufferWithFilter`, BGRA, cursor included) and VideoToolbox encodes it in real time: main profile, no B-frames (decode order must equal display order), low-latency rate control where available, a keyframe every 4 s, `--kbps` bitrate. The encoder output callback queues AVCC frames in C, and Go pulls them, so no Go function is exported to C. The first message is `{"t":"config"}` with the codec string (`avc1.PPCCLL` from the SPS) and the avcC record built from SPS and PPS. Then come binary frames: `[1 byte keyframe flag][8 byte timestamp in µs][AVCC data]`. Each viewer skips frames until a keyframe. A new viewer, or one that falls behind, forces a keyframe. The browser decodes with WebCodecs `VideoDecoder` onto a canvas.
   - **MJPEG (`/stream`):** ScreenCaptureKit captures a JPEG at `--width` (about 40 ms per frame at 1280 px), sent as `multipart/x-mixed-replace` at `--fps`.
   - **Choice:** WebCodecs exists only in a secure context (HTTPS or localhost). The viewer uses H.264 when it can, and falls back to MJPEG when it cannot, or when no frame arrives within 5 s. Capture runs only while someone watches, and a slow viewer gets the newest frame, never a backlog.
@@ -108,7 +108,7 @@ Typing presses shift before a shifted key. Each key is held 40–95 ms. Gaps bet
 - **Tailscale (`--tailscale`):** reads `tailscale status --json`, finding the CLI on PATH or inside `/Applications/Tailscale.app`. If the tailnet has HTTPS certificates, the server binds `127.0.0.1` and `tailscale serve --bg --https=8443` proxies HTTPS to it, removed again on exit (`--https=8443 off`). Viewers get an HTTPS MagicDNS link and H.264. Without certificates it binds the Mac's tailnet IPv4 over HTTP (encrypted by WireGuard), and viewers get MJPEG.
 - **Roles:** two tokens. The view token can watch. The control token can also drive input. The token rides in the link's URL fragment, so it never shows up in server logs, and the page passes it to `/stream` and `/control`. Plain HTTP: use it on a trusted network, or bind `127.0.0.1`.
 - **Control:** a WebSocket (`/control`) carries pointer position (as a fraction of the image), buttons, wheel notches and physical key codes (`KeyboardEvent.code`, mapped to HID usages). Only one controller at a time; a second gets `409`. When the controller leaves, or the tab loses focus, every key and button is released.
-- **Relay, not generation:** a person's hand already moves like a person, so the engine passes it through (`RelayMove`, `RelayButtons`, `RelayWheel`, `RelayKeys`). Moves feed forward from the last relayed point with a gentle pull toward the real cursor. The engine learns the acceleration gain as it goes, and closes the gap in half steps once the hand holds still. After the hand stops, the viewer repeats the final spot a few times so the cursor settles on it.
+- **Relay:** a person's hand already moves like a person, so the engine passes it through instead of generating a path (`RelayMove`, `RelayButtons`, `RelayWheel`, `RelayKeys`). Moves feed forward from the last relayed point with a gentle pull toward the real cursor. The engine learns the acceleration gain as it goes, and closes the gap in half steps once the hand holds still. After the hand stops, the viewer repeats the final spot a few times so the cursor settles on it.
 - **Shared engine:** relayed input shares the engine's lock and button state with agent actions, so reports never interleave. An agent action running in another process sees the remote hand as a person taking over, and stops.
 
 ## Install and setup

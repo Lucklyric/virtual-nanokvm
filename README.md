@@ -19,13 +19,13 @@ One human-like input engine, two input paths:
 
 ## Human-like movement
 
-A move never jumps. Every move is randomized:
+A move never jumps, and no two moves are the same. Each one has:
 
-- **Curved path** that bends to one side, like a wrist arc
-- **Natural speed**: slow start, fast middle, slow finish
-- **Fitts's law timing**: longer for far or small targets
-- **Overshoot and correction** on long moves
-- **Slight tremor** that fades near the target
+- a curved path that bends to one side, like a wrist arc
+- a natural speed: slow start, fast middle, slow finish
+- Fitts's law timing: longer for far or small targets
+- an overshoot and correction on some long moves
+- a slight tremor that fades near the target
 
 ![Different paths between the same two points](docs/img/trajectories.svg)
 
@@ -59,7 +59,7 @@ codex plugin marketplace add https://github.com/Lucklyric/virtual-nanokvm.git
 codex plugin add vnkvm@virtual-nanokvm
 ```
 
-Both install the MCP server and a `vnkvm` skill that teaches the agent the screenshot → act → check loop. The server builds itself on first start (Go and the Xcode command line tools are needed; the one-line installer sets them up). Then run **`/vnkvm:setup`** in Claude Code, or ask Codex to "run the vnkvm doctor": it checks and requests the **Accessibility** and **Screen Recording** permissions for the app running the agent. Set `VNKVM_INPUT=driver` to use the driver input instead of `sys`.
+Both install the MCP server and a `vnkvm` skill that teaches the agent the screenshot → act → check loop. The server builds itself on first start (Go and the Xcode command line tools are needed; the one-line installer sets them up). Then run `/vnkvm:setup` in Claude Code, or ask Codex to "run the vnkvm doctor": it checks and requests the Accessibility and Screen Recording permissions for the app running the agent. Set `VNKVM_INPUT=driver` to use the driver input instead of `sys`.
 
 **Any other MCP client**
 
@@ -77,7 +77,7 @@ virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 | `cursor_position` | Where the cursor is |
 | `doctor` | Checks permissions, display, driver input and Tailscale |
 
-Each position comes back both **global** (whole desktop) and **relative** (pixels in the screenshot). The mouse tools accept coordinates straight from a window's screenshot.
+Each position comes back both global (whole desktop) and relative (pixels in the screenshot). The mouse tools accept coordinates straight from a window's screenshot.
 
 ### Watch and control from a browser
 
@@ -86,9 +86,9 @@ vnkvm serve --input sys              # on your local network
 vnkvm serve --input sys --tailscale  # on your tailnet, from anywhere
 ```
 
-It prints two links: a **control** link (watch, plus mouse and keyboard) and a **view** link (watch only). Click **Take control** to drive the Mac; your own hand movement is relayed as-is. One person controls at a time, and every key and button is released when they leave.
+It prints two links: a control link (watch, plus mouse and keyboard) and a view link (watch only). Click **Take control** to drive the Mac; your own hand movement is relayed as-is. One person controls at a time, and every key and button is released when they leave.
 
-**Video**, as on the NanoKVM: **H.264** (hardware-encoded with VideoToolbox, decoded in the browser with WebCodecs) when the page is HTTPS or localhost, otherwise **MJPEG**. The viewer picks automatically.
+Video works as on the NanoKVM: H.264 (hardware-encoded with VideoToolbox, decoded in the browser with WebCodecs) when the page is HTTPS or localhost, otherwise MJPEG. The viewer picks automatically.
 
 **Tailscale:** `--tailscale` shares the viewer on your tailnet only. If your tailnet has HTTPS certificates (Tailscale admin console > DNS > enable HTTPS Certificates), vnkvm binds localhost and runs `tailscale serve` on port 8443, so viewers get an `https://<mac>.<tailnet>.ts.net:8443` link and H.264. Without certificates it serves plain HTTP on the tailnet address (still encrypted by WireGuard), and viewers get MJPEG.
 

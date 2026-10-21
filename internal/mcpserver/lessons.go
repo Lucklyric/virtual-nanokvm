@@ -96,17 +96,21 @@ func addLesson(app, text string) ([]string, error) {
 // stats counts what this server process has done, to spot an inefficient
 // loop the model cannot see from inside one turn.
 type stats struct {
-	mu            sync.Mutex
-	Shots         int            `json:"shots"`
-	Zooms         int            `json:"zooms"`
-	Acts          int            `json:"act_calls"`
-	Singles       int            `json:"single_action_calls"`
-	Steps         int            `json:"steps_run"`
-	Failures      map[string]int `json:"failures"`
-	lookStreak    int            // screenshots since the last action
-	singleStreak  int            // single-action calls in a row
+	mu sync.Mutex
+	counters
+	lookStreak    int // screenshots since the last action
+	singleStreak  int // single-action calls in a row
 	lastFail      string
 	lastFailCount int
+}
+
+type counters struct {
+	Shots    int            `json:"shots"`
+	Zooms    int            `json:"zooms"`
+	Acts     int            `json:"act_calls"`
+	Singles  int            `json:"single_action_calls"`
+	Steps    int            `json:"steps_run"`
+	Failures map[string]int `json:"failures"`
 }
 
 func (s *stats) shot(zoom bool) string {
@@ -157,14 +161,15 @@ func (s *stats) action(single bool, steps int, err error) string {
 	return strings.Join(hints, "\n")
 }
 
-func (s *stats) snapshot() stats {
+func (s *stats) snapshot() counters {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f := map[string]int{}
+	c := s.counters
+	c.Failures = map[string]int{}
 	for k, v := range s.Failures {
-		f[k] = v
+		c.Failures[k] = v
 	}
-	return stats{Shots: s.Shots, Zooms: s.Zooms, Acts: s.Acts, Singles: s.Singles, Steps: s.Steps, Failures: f}
+	return c
 }
 
 func failureKind(err error) string {

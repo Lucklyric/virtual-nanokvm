@@ -121,3 +121,50 @@ func TestScreenshotsStayInOneApp(t *testing.T) {
 		t.Fatalf("display screenshot refused with AllowDisplay: %s", text(res))
 	}
 }
+
+type fakeBackground struct{ calls []string }
+
+func (f *fakeBackground) Act(pid int, x, y float64, menu bool) (string, error) {
+	f.calls = append(f.calls, fmt.Sprintf("act %d %.0f %.0f %v", pid, x, y, menu))
+	return "pressed AXButton", nil
+}
+func (f *fakeBackground) Menu(pid int, path string) error {
+	f.calls = append(f.calls, fmt.Sprintf("menu %d %s", pid, path))
+	return nil
+}
+func (f *fakeBackground) Engine(int, float64, float64) *human.Engine {
+	return human.New(&hid.Recorder{}, fixedCursor{})
+}
+
+func TestBackgroundModeStaysInTheApp(t *testing.T) {
+	scr := &fakeScreen{windows: []screen.Window{{ID: 7, PID: 42, App: "Notes", X: 100, Y: 80, Width: 800, Height: 600}}}
+	bg := &fakeBackground{}
+	cs := connect(t, scr, Options{Background: bg})
+	callTool(t, cs, "screenshot", map[string]any{"app": "Notes"})
+
+	res := callTool(t, cs, "act", map[string]any{"shot": 1, "mode": "background", "observe": false, "steps": []map[string]any{
+		{"do": "click", "x": 512, "y": 384},
+		{"do": "menu", "menu": "File > New"},
+		{"do": "move", "x": 10, "y": 10},
+	}})
+	if res.IsError {
+		t.Fatalf("background act failed: %s", text(res))
+	}
+	// Pixel centers: (512.5, 384.5) × 0.78125 pt/px, plus the window origin (100, 80).
+	if len(bg.calls) != 2 || bg.calls[0] != "act 42 500 380 false" || bg.calls[1] != "menu 42 File > New" {
+		t.Fatalf("background calls %v", bg.calls)
+	}
+	if !strings.Contains(text(res), "no cursor") {
+		t.Fatalf("move in background was not reported as skipped: %s", text(res))
+	}
+
+	for _, do := range []string{"right_click", "double_click", "drag"} {
+		res := callTool(t, cs, "act", map[string]any{"shot": 1, "mode": "background", "steps": []map[string]any{{"do": do, "x": 5, "y": 5}}})
+		if !res.IsError {
+			t.Errorf("%s ran in background mode", do)
+		}
+	}
+	if res := callTool(t, cs, "act", map[string]any{"mode": "sideways", "steps": []map[string]any{{"do": "key", "keys": "a"}}}); !res.IsError {
+		t.Error("unknown mode accepted")
+	}
+}

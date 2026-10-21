@@ -46,6 +46,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Lucklyric/virtual-nanokvm/internal/ax"
 	"github.com/Lucklyric/virtual-nanokvm/internal/doctor"
 	"github.com/Lucklyric/virtual-nanokvm/internal/hid"
 	"github.com/Lucklyric/virtual-nanokvm/internal/human"
@@ -69,6 +70,47 @@ func (mainScreen) Capture(ctx context.Context, window uint32) (image.Image, erro
 	return screen.Capture(ctx, window)
 }
 func (mainScreen) Preview(width int) ([]byte, error) { return screen.Frame(width, 0.5) }
+
+// appBackground acts on one app without the cursor: Accessibility presses
+// controls, and a second engine sends keys and the wheel to the app's process.
+type appBackground struct {
+	ev     *hid.AppEvents
+	engine *human.Engine
+}
+
+func (b *appBackground) Act(pid int, x, y float64, menu bool) (string, error) {
+	r, err := ax.Act(pid, x, y, menu)
+	what := r.Role
+	if r.Label != "" {
+		what += fmt.Sprintf(" %q", r.Label)
+	}
+	if err != nil {
+		return what, err
+	}
+	if r.Did == "key" {
+		// The control takes no press action (web content): it is focused,
+		// and a key triggers it, as for a keyboard user.
+		err := b.Engine(pid, x, y).Press(context.Background(), r.Key)
+		return "focused " + what + " and pressed " + r.Key, err
+	}
+	return r.Did + " " + what, nil
+}
+
+func (b *appBackground) Menu(pid int, path string) error { return ax.Menu(pid, path) }
+
+func (b *appBackground) Engine(pid int, x, y float64) *human.Engine {
+	b.ev.Target(pid, x, y)
+	return b.engine
+}
+
+// appCursor is the background engine's cursor: a fixed point, so typing and
+// scrolling never mistake the person's mouse for a take-over.
+type appCursor struct{ ev *hid.AppEvents }
+
+func (c appCursor) Position() (human.Point, error) {
+	x, y := c.ev.Position()
+	return human.Point{X: x, Y: y}, nil
+}
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: vnkvm mcp|move X Y|click X Y|type TEXT|serve|doctor [--input driver|sys] [--bridge-socket PATH] [--dry-run]")
@@ -120,7 +162,13 @@ func main() {
 
 	switch cmd {
 	case "mcp":
-		server := mcpserver.New(engine, mainScreen{}, mcpserver.Options{BridgeSocket: *socket, AllowDisplay: *allowDisplay})
+		opt := mcpserver.Options{BridgeSocket: *socket, AllowDisplay: *allowDisplay}
+		if ev, err := hid.NewAppEvents(); err == nil {
+			opt.Background = &appBackground{ev: ev, engine: human.New(ev, appCursor{ev})}
+		} else {
+			log.Printf("background mode off: %v", err)
+		}
+		server := mcpserver.New(engine, mainScreen{}, opt)
 		if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
 			log.Print(err)
 		}

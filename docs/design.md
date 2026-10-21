@@ -88,6 +88,18 @@ Typing presses shift before a shifted key. Each key is held 40–95 ms. Gaps bet
 | `mouse_move`, `click`, `drag`, `scroll`, `type_text`, `key` | One step each, with `observe` off by default. |
 | `lessons` | Reads or records one-line lessons for an app, and returns the session's counters. |
 
+### Background mode
+
+`mode: "background"` on `act` and the action tools acts on the shot's app without the shared cursor or keyboard focus:
+
+- **Click:** the pixel maps to a global point, and `AXUIElementCopyElementAtPosition` on the app's element finds the control there (other apps' windows on top do not matter). The server walks up to 5 parents to the first element that takes `AXPress`. Text fields get `AXFocused` instead. Web controls in Chromium list no press action, so buttons, links, checkboxes and similar roles are focused and then triggered with Space (Enter for links).
+- **Chromium and Electron** build their tree only for assistive apps: on a miss, the server sets `AXManualAccessibility` on the app (Chrome answers "unsupported" and builds it anyway) and retries for up to 1.5 s.
+- **Keys and wheel:** a second engine over `hid.AppEvents` posts keyboard and wheel events with `CGEventPostToPid`. Its cursor is a fixed point, so the person's mouse never counts as a take-over. `hold` keeps keys down for a set time.
+- **Menus:** a `menu` step presses a menu bar item through Accessibility (`File > New`). Commands on the current document do nothing while the app is in the background, since it has no key window.
+- **Refused:** right-click (`AXShowMenu` brings the app forward), double-click, drag. `move` is skipped.
+- **Settle and change** compare small captures of the app's own window, since other windows may cover it.
+- **Not used:** private SkyLight calls (`SLEventPostToPid` plus focus records), which reach more apps but can break with any macOS update.
+
 ### Privacy: one app at a time
 
 - `screenshot` needs `app` or `window_id`. Whole-display capture is off unless the person starts the server with `--allow-display` or `VNKVM_ALLOW_DISPLAY=1`. A window capture (`screencapture -l`) contains that window only, even when others cover it.
@@ -162,5 +174,6 @@ Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds 
 - **v2**: browser viewer with an MJPEG stream and remote control, token roles, one controller at a time.
 - **v2.1**: H.264 (VideoToolbox → WebCodecs) with MJPEG fallback, Tailscale sharing with HTTPS via `tailscale serve`, one-line installer, `doctor`.
 - **v2.2**: shot ids, low-detail first looks with zoom and aim marks, `act` sequences with settle and change detection, and a skill that teaches the agent to plan sequences.
-- **v2.3 (this)**: app-only screenshots by default, titles hidden for other apps, per-app lessons with efficiency hints.
+- **v2.3**: app-only screenshots by default, titles hidden for other apps, per-app lessons with efficiency hints.
+- **v2.4 (this)**: background mode through Accessibility and per-app events, `hold` and `menu` steps, foreground speed and game guidance in the skill.
 - **v3**: launchd units for the bridge and daemon, full-display capture of secondary screens (windows on any screen already work), and Linux (USB gadget on `dummy_hcd` or USB/IP) and Windows targets.

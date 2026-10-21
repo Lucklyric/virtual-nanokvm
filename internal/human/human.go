@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"time"
 
@@ -660,6 +661,72 @@ func (e *Engine) Press(ctx context.Context, spec string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.guard(e.combo(ctx, mods, key))
+}
+
+// Hold keeps keys down for d, then lets go: walking in a game, holding an
+// arrow to scroll. keys is one or more combinations separated by spaces, held
+// together ("w", "up right", "shift+right"). At most 6 keys.
+func (e *Engine) Hold(ctx context.Context, keys string, d time.Duration) error {
+	var mods uint8
+	var usages []uint16
+	for _, spec := range strings.Fields(keys) {
+		ms, key, err := keymap.Combo(spec)
+		if err != nil {
+			return err
+		}
+		for _, m := range ms {
+			mods |= m
+		}
+		mods |= key.Modifiers
+		usages = append(usages, key.Usage)
+	}
+	if len(usages) == 0 || len(usages) > 6 {
+		return fmt.Errorf("hold 1 to 6 keys, separated by spaces")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.guard(e.holdKeys(ctx, mods, usages, d))
+}
+
+func (e *Engine) holdKeys(ctx context.Context, mods uint8, usages []uint16, d time.Duration) error {
+	if err := e.hold(); err != nil {
+		return err
+	}
+	if mods != 0 {
+		if err := e.HID.Keyboard(mods, nil); err != nil {
+			return err
+		}
+		if err := e.pause(ctx, 25, 60); err != nil {
+			return err
+		}
+	}
+	if err := e.HID.Keyboard(mods, usages); err != nil {
+		return err
+	}
+	end := time.Now().Add(d)
+	for time.Now().Before(end) {
+		if err := sleepCtx(ctx, min(50*time.Millisecond, time.Until(end))); err != nil {
+			return err
+		}
+		if err := e.still(); err != nil {
+			return err
+		}
+	}
+	if err := e.HID.Keyboard(mods, nil); err != nil {
+		return err
+	}
+	return e.HID.Keyboard(0, nil)
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 func (e *Engine) combo(ctx context.Context, mods []uint8, key keymap.Stroke) error {

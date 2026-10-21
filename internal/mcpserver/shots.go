@@ -28,6 +28,7 @@ const (
 type shot struct {
 	ID      int
 	Window  uint32  // 0: main display
+	PID     int     // the window's app
 	App     string  // window's app, for messages
 	FW, FH  float64 // frame size in points when taken
 	QX, QY  float64 // region origin within the frame, points
@@ -155,7 +156,7 @@ func take(ctx context.Context, scr Screen, reg *shots, req shotRequest) (*shot, 
 		if err != nil {
 			return nil, nil, err
 		}
-		sh.Window, sh.App, sh.FW, sh.FH, sh.FX, sh.FY, win = b.Window, b.App, b.FW, b.FH, ox, oy, w
+		sh.Window, sh.PID, sh.App, sh.FW, sh.FH, sh.FX, sh.FY, win = b.Window, b.PID, b.App, b.FW, b.FH, ox, oy, w
 		r := req.Region
 		if r[2] <= 0 || r[3] <= 0 {
 			if req.Mark == nil {
@@ -173,7 +174,7 @@ func take(ctx context.Context, scr Screen, reg *shots, req shotRequest) (*shot, 
 			return nil, nil, err
 		}
 		win = &w
-		sh.App, sh.FW, sh.FH, sh.FX, sh.FY = w.App, w.Width, w.Height, w.X, w.Y
+		sh.PID, sh.App, sh.FW, sh.FH, sh.FX, sh.FY = w.PID, w.App, w.Width, w.Height, w.X, w.Y
 		sh.QW, sh.QH = w.Width, w.Height
 	} else {
 		sh.FW, sh.FH = scr.Bounds()

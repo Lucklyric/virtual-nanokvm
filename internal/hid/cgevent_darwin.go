@@ -75,14 +75,28 @@ static int vnkvm_scroll(int vertical, int horizontal) {
 	return 0;
 }
 
-static int vnkvm_key(CGKeyCode code, bool down, CGEventFlags flags, bool modifierKey) {
+// pid 0 posts to the system; otherwise the event goes to that app only.
+static int vnkvm_key(CGKeyCode code, bool down, CGEventFlags flags, bool modifierKey, pid_t pid) {
 	CGEventRef e = CGEventCreateKeyboardEvent(vnkvm_source(), code, down);
 	if (e == NULL) return -1;
 	if (modifierKey) {
 		CGEventSetType(e, kCGEventFlagsChanged);
 	}
 	CGEventSetFlags(e, flags);
-	CGEventPost(kCGHIDEventTap, e);
+	if (pid) {
+		CGEventPostToPid(pid, e);
+	} else {
+		CGEventPost(kCGHIDEventTap, e);
+	}
+	CFRelease(e);
+	return 0;
+}
+
+static int vnkvm_scroll_to(pid_t pid, double x, double y, int vertical, int horizontal) {
+	CGEventRef e = CGEventCreateScrollWheelEvent(vnkvm_source(), kCGScrollEventUnitLine, 2, vertical, horizontal);
+	if (e == NULL) return -1;
+	CGEventSetLocation(e, CGPointMake(x, y));
+	CGEventPostToPid(pid, e);
 	CFRelease(e);
 	return 0;
 }
@@ -167,14 +181,82 @@ func flags(modifiers uint8) C.CGEventFlags {
 }
 
 func (quartz) key(code uint16, down bool, modifiers uint8) error {
-	if C.vnkvm_key(C.CGKeyCode(code), C.bool(down), flags(modifiers), false) != 0 {
+	if C.vnkvm_key(C.CGKeyCode(code), C.bool(down), flags(modifiers), false, 0) != 0 {
 		return errPost
 	}
 	return nil
 }
 
 func (quartz) modifier(code uint16, down bool, modifiers uint8) error {
-	if C.vnkvm_key(C.CGKeyCode(code), C.bool(down), flags(modifiers), true) != 0 {
+	if C.vnkvm_key(C.CGKeyCode(code), C.bool(down), flags(modifiers), true, 0) != 0 {
+		return errPost
+	}
+	return nil
+}
+
+// AppEvents is a Backend for background work: keys and the wheel go to one
+// app (by pid) without moving the cursor or changing the front app. It has
+// no pointer of its own; buttons are refused.
+type AppEvents struct {
+	*CGEvent
+	app *appPoster
+}
+
+// NewAppEvents returns a background backend. Point it at an app with Target.
+func NewAppEvents() (*AppEvents, error) {
+	if C.AXIsProcessTrusted() == 0 {
+		return nil, errors.New("Accessibility permission missing: allow the app that runs vnkvm in System Settings > Privacy & Security > Accessibility")
+	}
+	a := &appPoster{}
+	return &AppEvents{CGEvent: newCGEvent(a), app: a}, nil
+}
+
+// Target sends what follows to pid; wheel events land at global (x, y).
+func (a *AppEvents) Target(pid int, x, y float64) {
+	a.app.pid, a.app.x, a.app.y = C.pid_t(pid), x, y
+}
+
+// Position is where wheel events land; it never moves on its own.
+func (a *AppEvents) Position() (float64, float64) { return a.app.x, a.app.y }
+
+var errNoPointer = errors.New("background mode has no pointer: clicks go through Accessibility")
+
+type appPoster struct {
+	pid  C.pid_t
+	x, y float64
+}
+
+func (a *appPoster) cursor() (float64, float64)            { return a.x, a.y }
+func (a *appPoster) clamp(x, y float64) (float64, float64) { return x, y }
+func (a *appPoster) mouse(float64, float64, int, int, int, *bool, int, int) error {
+	return errNoPointer
+}
+
+func (a *appPoster) scroll(vertical, horizontal int) error {
+	if a.pid == 0 {
+		return errors.New("background: no target app")
+	}
+	if C.vnkvm_scroll_to(a.pid, C.double(a.x), C.double(a.y), C.int(vertical), C.int(horizontal)) != 0 {
+		return errPost
+	}
+	return nil
+}
+
+func (a *appPoster) key(code uint16, down bool, modifiers uint8) error {
+	if a.pid == 0 {
+		return errors.New("background: no target app")
+	}
+	if C.vnkvm_key(C.CGKeyCode(code), C.bool(down), flags(modifiers), false, a.pid) != 0 {
+		return errPost
+	}
+	return nil
+}
+
+func (a *appPoster) modifier(code uint16, down bool, modifiers uint8) error {
+	if a.pid == 0 {
+		return errors.New("background: no target app")
+	}
+	if C.vnkvm_key(C.CGKeyCode(code), C.bool(down), flags(modifiers), true, a.pid) != 0 {
 		return errPost
 	}
 	return nil

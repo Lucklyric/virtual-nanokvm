@@ -21,18 +21,32 @@ const (
 
 // step is one action in a sequence. Coordinates are pixels of a shot.
 type step struct {
-	Do    string   `json:"do" jsonschema:"move, click, double_click, right_click, drag, scroll, type, key, wait or wait_for"`
+	Do    string   `json:"do" jsonschema:"move, click, double_click, right_click, drag, scroll, type, key, hold, menu, wait or wait_for"`
 	Shot  int      `json:"shot,omitempty" jsonschema:"shot id the x, y come from (defaults to the sequence's shot)"`
 	X     *float64 `json:"x,omitempty" jsonschema:"pixel x in that shot; move, drag: required; clicks: move here first, omit to click in place"`
 	Y     *float64 `json:"y,omitempty" jsonschema:"pixel y in that shot"`
 	Size  float64  `json:"size,omitempty" jsonschema:"rough target size in that shot's pixels; small targets get a slower, careful approach"`
 	Text  string   `json:"text,omitempty" jsonschema:"type: the text (US keyboard characters)"`
 	WPM   float64  `json:"wpm,omitempty" jsonschema:"type: words per minute (default 70)"`
-	Keys  string   `json:"keys,omitempty" jsonschema:"key: a key or combination, e.g. enter, cmd+a, cmd+shift+4"`
+	Keys  string   `json:"keys,omitempty" jsonschema:"key: a key or combination, e.g. enter, cmd+a, cmd+shift+4; hold: keys held together, separated by spaces, e.g. w or up right"`
+	Menu  string   `json:"menu,omitempty" jsonschema:"menu: a menu bar path of the shot's app, e.g. Edit > Select All (works in background, where cmd shortcuts do not arrive)"`
 	DX    int      `json:"dx,omitempty" jsonschema:"scroll: wheel notches, positive scrolls right"`
 	DY    int      `json:"dy,omitempty" jsonschema:"scroll: wheel notches, positive scrolls down"`
-	MS    int      `json:"ms,omitempty" jsonschema:"wait: milliseconds; wait_for: timeout (default 3000, max 15000)"`
+	MS    int      `json:"ms,omitempty" jsonschema:"wait: milliseconds; hold: how long to hold the keys; wait_for: timeout (default 3000, max 15000)"`
 	Until string   `json:"until,omitempty" jsonschema:"wait_for: change (the screen changed since before the previous step) or stable (it stopped moving)"`
+}
+
+// Background acts on one app without the cursor: controls are pressed
+// through Accessibility, keys and the wheel go to the app's process.
+type Background interface {
+	// Act presses the control of app pid at global (x, y), focuses it when it
+	// is a text field, or opens its context menu. It describes what it did.
+	Act(pid int, x, y float64, menu bool) (string, error)
+	// Menu chooses a menu bar item of app pid, such as "Edit > Select All".
+	Menu(pid int, path string) error
+	// Engine returns an engine whose keyboard and wheel reach only app pid;
+	// the wheel lands at global (x, y).
+	Engine(pid int, x, y float64) *human.Engine
 }
 
 // runner executes steps against the engine and screen.
@@ -40,12 +54,41 @@ type runner struct {
 	e    *human.Engine
 	scr  Screen
 	reg  *shots
-	last *shot // shot of the last coordinate step, for the observation
+	last *shot      // shot of the last coordinate step, for the observation
+	bg   Background // set in background mode
+	ax   Background // Accessibility, for menus in either mode; may be nil
 }
 
 // validate checks a sequence before anything moves, so a typo in step 5
 // does not leave the first four done.
 func (r *runner) validate(steps []step, defShot int) error {
+	if r.bg != nil {
+		sh := r.reg.latest()
+		if defShot != 0 {
+			sh, _ = r.reg.get(defShot)
+		}
+		for _, s := range steps {
+			if s.X != nil && s.Shot == 0 {
+				s.Shot = defShot
+			}
+			if s.X != nil {
+				sh, _ = r.reg.get(s.Shot)
+			}
+			if sh != nil && sh.Window == 0 {
+				return fmt.Errorf("background mode works on one app: use a shot taken with app or window_id")
+			}
+			switch s.Do {
+			case "double_click", "drag":
+				return fmt.Errorf("%s is not available in background mode; use foreground, or a key such as enter", s.Do)
+			case "right_click":
+				return fmt.Errorf("right_click would bring the app to the front; use foreground, or a menu step")
+			}
+		}
+		if sh == nil {
+			return fmt.Errorf("background mode needs a shot of the app first (screenshot with app)")
+		}
+		r.last = sh
+	}
 	if len(steps) == 0 {
 		return fmt.Errorf("no steps")
 	}
@@ -81,6 +124,14 @@ func (r *runner) validate(steps []step, defShot int) error {
 			if s.MS <= 0 || s.MS > 15000 {
 				return fmt.Errorf("%s: ms must be 1..15000", where)
 			}
+		case "hold":
+			if s.Keys == "" || s.MS <= 0 || s.MS > 10000 {
+				return fmt.Errorf("%s: needs keys and ms (1..10000)", where)
+			}
+		case "menu":
+			if s.Menu == "" {
+				return fmt.Errorf("%s: needs menu, e.g. Edit > Select All", where)
+			}
 		case "wait_for":
 			if s.Until != "change" && s.Until != "stable" {
 				return fmt.Errorf("%s: until must be change or stable", where)
@@ -110,7 +161,7 @@ func (r *runner) run(ctx context.Context, steps []step) ([]string, error) {
 	var before []byte // preview taken before the previous action, for wait_for change
 	for i, s := range steps {
 		if i+1 < len(steps) && steps[i+1].Do == "wait_for" && steps[i+1].Until == "change" {
-			before, _ = r.scr.Preview(previewWidth)
+			before, _, _ = r.peek(context.Background())
 		}
 		line, err := r.one(ctx, s, before)
 		label := fmt.Sprintf("%d. %s", i+1, s.Do)
@@ -124,6 +175,9 @@ func (r *runner) run(ctx context.Context, steps []step) ([]string, error) {
 }
 
 func (r *runner) one(ctx context.Context, s step, before []byte) (string, error) {
+	if r.bg != nil {
+		return r.background(ctx, s, before)
+	}
 	var p human.Point
 	var size float64
 	var sh *shot
@@ -174,6 +228,10 @@ func (r *runner) one(ctx context.Context, s step, before []byte) (string, error)
 		return fmt.Sprintf(" %d characters", len(s.Text)), r.e.Type(ctx, s.Text, s.WPM)
 	case "key":
 		return " " + s.Keys, r.e.Press(ctx, s.Keys)
+	case "hold":
+		return fmt.Sprintf(" %s for %d ms", s.Keys, s.MS), r.e.Hold(ctx, s.Keys, time.Duration(s.MS)*time.Millisecond)
+	case "menu":
+		return r.menu(s.Menu)
 	case "wait":
 		return fmt.Sprintf(" %d ms", s.MS), sleep(ctx, time.Duration(s.MS)*time.Millisecond)
 	case "wait_for":
@@ -187,6 +245,112 @@ func (r *runner) one(ctx context.Context, s step, before []byte) (string, error)
 		return r.waitChange(ctx, before, timeout), nil
 	}
 	return "", fmt.Errorf("unknown action %q", s.Do)
+}
+
+// background runs one step on the app of the current shot, without the cursor.
+func (r *runner) background(ctx context.Context, s step, before []byte) (string, error) {
+	sh := r.last
+	var p human.Point
+	at := ""
+	if s.X != nil {
+		var err error
+		if sh, err = r.reg.get(s.Shot); err != nil {
+			return "", err
+		}
+		// Covered points are fine here: Accessibility hit-tests inside the app.
+		if p, err = toGlobal(r.scr, sh, *s.X, *s.Y); err != nil {
+			return "", err
+		}
+		r.last = sh
+		at = fmt.Sprintf(" at shot %d (%.0f, %.0f)", sh.ID, *s.X, *s.Y)
+	} else {
+		// No point given: the wheel lands in the middle of the window.
+		var err error
+		if p, err = toGlobal(r.scr, sh, float64(sh.W)/2, float64(sh.H)/2); err != nil {
+			return "", err
+		}
+	}
+	switch s.Do {
+	case "move":
+		return at + " (skipped: background mode has no cursor)", nil
+	case "click", "right_click":
+		if s.X == nil {
+			return "", fmt.Errorf("background clicks need x and y")
+		}
+		did, err := r.bg.Act(sh.PID, p.X, p.Y, s.Do == "right_click")
+		return at + ": " + did, err
+	case "scroll":
+		return fmt.Sprintf("%s dx %d dy %d", at, s.DX, s.DY), r.bg.Engine(sh.PID, p.X, p.Y).Scroll(ctx, s.DX, s.DY)
+	case "type":
+		return fmt.Sprintf(" %d characters", len(s.Text)), r.bg.Engine(sh.PID, p.X, p.Y).Type(ctx, s.Text, s.WPM)
+	case "key":
+		return " " + s.Keys, r.bg.Engine(sh.PID, p.X, p.Y).Press(ctx, s.Keys)
+	case "hold":
+		return fmt.Sprintf(" %s for %d ms", s.Keys, s.MS), r.bg.Engine(sh.PID, p.X, p.Y).Hold(ctx, s.Keys, time.Duration(s.MS)*time.Millisecond)
+	case "menu":
+		return r.menu(s.Menu)
+	}
+	return r.one2(ctx, s, before)
+}
+
+// menu chooses a menu bar item of the current shot's app, in either mode.
+func (r *runner) menu(path string) (string, error) {
+	sh := r.last
+	if sh == nil {
+		sh = r.reg.latest()
+	}
+	if sh == nil || sh.Window == 0 {
+		return "", fmt.Errorf("menu needs a shot of the app first (screenshot with app)")
+	}
+	if r.ax == nil {
+		return "", fmt.Errorf("menus need the Accessibility permission")
+	}
+	return " " + path, r.ax.Menu(sh.PID, path)
+}
+
+// one2 runs the steps that are the same in both modes: wait and wait_for.
+func (r *runner) one2(ctx context.Context, s step, before []byte) (string, error) {
+	switch s.Do {
+	case "wait":
+		return fmt.Sprintf(" %d ms", s.MS), sleep(ctx, time.Duration(s.MS)*time.Millisecond)
+	case "wait_for":
+		timeout := 3 * time.Second
+		if s.MS > 0 {
+			timeout = time.Duration(s.MS) * time.Millisecond
+		}
+		if s.Until == "stable" {
+			return r.settle(ctx, timeout), nil
+		}
+		return r.waitChange(ctx, before, timeout), nil
+	}
+	return "", fmt.Errorf("%s is not available in background mode", s.Do)
+}
+
+// peek is a small, fast picture of what the agent is looking at, to see
+// whether it moved. In the foreground it is the main display (cropped to the
+// window by area); in the background, the app's own window, since other
+// windows may cover it.
+func (r *runner) peek(ctx context.Context) ([]byte, [4]float64, bool) {
+	if r.bg == nil {
+		area, ok := r.area()
+		if !ok {
+			return nil, area, false
+		}
+		b, err := r.scr.Preview(previewWidth)
+		return b, area, err == nil
+	}
+	if r.last == nil || r.last.Window == 0 {
+		return nil, [4]float64{}, false
+	}
+	raw, err := r.scr.Capture(ctx, r.last.Window)
+	if err != nil {
+		return nil, [4]float64{}, false
+	}
+	rb := raw.Bounds()
+	w := min(previewWidth, rb.Dx())
+	h := max(1, rb.Dy()*w/rb.Dx())
+	b, err := encodeJPEG(shrink(raw, rb, w, h))
+	return b, [4]float64{0, 0, 1, 1}, err == nil
 }
 
 // area is the part of the main display the agent is looking at, as fractions
@@ -215,31 +379,26 @@ func (r *runner) area() ([4]float64, bool) {
 // settle waits until the screen stops moving, or timeout.
 func (r *runner) settle(ctx context.Context, timeout time.Duration) string {
 	start := time.Now()
-	area, ok := r.area()
-	if !ok {
-		sleep(ctx, 400*time.Millisecond)
-		return " (window off the main display: waited 400 ms)"
-	}
 	if err := sleep(ctx, 120*time.Millisecond); err != nil {
 		return ""
 	}
-	prev, err := r.scr.Preview(previewWidth)
-	for err == nil && time.Since(start) < timeout {
+	prev, area, ok := r.peek(ctx)
+	if !ok {
+		sleep(ctx, 300*time.Millisecond)
+		return " (could not watch this window: waited 400 ms)"
+	}
+	for time.Since(start) < timeout {
 		if sleep(ctx, 100*time.Millisecond) != nil {
 			break
 		}
-		var cur []byte
-		if cur, err = r.scr.Preview(previewWidth); err != nil {
-			break
+		cur, _, ok := r.peek(ctx)
+		if !ok {
+			return " (could not watch this window: waited)"
 		}
 		if n, _ := changed(prev, cur, area); n < stillPixels {
 			return fmt.Sprintf(" (still after %d ms)", time.Since(start).Milliseconds())
 		}
 		prev = cur
-	}
-	if err != nil {
-		sleep(ctx, 300*time.Millisecond)
-		return " (could not watch the screen: waited)"
 	}
 	return fmt.Sprintf(" (still moving after %d ms)", timeout.Milliseconds())
 }
@@ -247,14 +406,13 @@ func (r *runner) settle(ctx context.Context, timeout time.Duration) string {
 // waitChange waits until the screen differs from before, or timeout.
 func (r *runner) waitChange(ctx context.Context, before []byte, timeout time.Duration) string {
 	start := time.Now()
-	area, ok := r.area()
-	if before == nil || !ok {
+	if before == nil {
 		sleep(ctx, 500*time.Millisecond)
-		return " (cannot watch this area: waited 500 ms)"
+		return " (cannot watch this window: waited 500 ms)"
 	}
 	for time.Since(start) < timeout {
-		cur, err := r.scr.Preview(previewWidth)
-		if err != nil {
+		cur, area, ok := r.peek(ctx)
+		if !ok {
 			break
 		}
 		if n, _ := changed(before, cur, area); n > changePixels {

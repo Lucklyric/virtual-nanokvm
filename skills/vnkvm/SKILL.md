@@ -1,11 +1,14 @@
 ---
 name: vnkvm
-description: Operate macOS apps through the vnkvm MCP tools (screenshot, act, click, type_text, key, scroll, drag). Use when a task needs clicking, typing or reading something on screen in a desktop app.
+description: Operate macOS apps through the vnkvm MCP tools (screenshot, act, click, type_text, key, scroll, drag), in the foreground with the real cursor or in the background without it. Use when a task needs clicking, typing or reading something on screen in a desktop app or a game.
 ---
 
 # Using vnkvm
 
-vnkvm drives the real mouse and keyboard with human-like movement, and sees the screen only through screenshots. The person at the Mac shares the same cursor, so act deliberately.
+vnkvm sees the screen only through screenshots of one app, and acts in one of two modes:
+
+- **Foreground** (default): the real mouse and keyboard, with human-like movement. The person shares the cursor, so act deliberately; if they move the mouse, vnkvm stops.
+- **Background** (`"mode": "background"` on `act` and the action tools): no cursor, and the app stays where it is, so the person keeps working. Controls are pressed through Accessibility, and keys go to that app only.
 
 Each model turn costs seconds; each vnkvm action costs about one. The goal is fewer turns: look cheaply, plan several steps from one look, and let `act` return the next look.
 
@@ -27,6 +30,40 @@ If a tool fails, or on first use, call `doctor` (with `fix: true` to raise the m
 3. **Zoom only when needed.** If a target is small, its text is hard to read, or two targets sit close together, call `screenshot` with `shot` and `region` around it. To check aim before an important click, call `screenshot` with `shot` and `mark` at the planned pixel: the crosshair shows where it will land.
 4. **Act.** Send the planned steps to `act`. It returns what each step did and a new low shot after the screen settles.
 5. **Check against the plan.** Compare the new shot with what you predicted. Zoom to read details only when the answer is not visible at low detail. Then plan the next sequence from this shot.
+
+## Choosing a mode
+
+Use the mode the person asks for. When they say "in the background", "don't take my mouse" or "while I work", use background. Otherwise use foreground.
+
+Background mode works by control, not by pixel:
+
+| Works in background | Does not |
+|---|---|
+| Buttons, checkboxes, tabs, menu items in native apps (Calculator, TextEdit, Settings) | Right-click (it brings the app forward), double-click, drag, hover |
+| Buttons and links on web pages in Chrome (focused, then Space or Enter) | Canvases, games, maps, drawing areas: no controls to press |
+| Text fields: the click focuses the field, then `type` and plain keys arrive | `cmd` shortcuts that run menu commands (Select All, Copy): use a `menu` step for app-wide commands instead |
+| `menu` steps for app-wide commands (File > New) | Commands on the current document (Edit > Select All) when the app is in the background |
+| Scrolling, `hold`, `wait_for` | A code editor's main text area in VS Code (focus a text field instead) |
+
+If a background step fails with "nothing to press there", the spot is not a control. Tell the person and offer foreground mode; do not switch on your own, since foreground takes their cursor.
+
+## Fast in the foreground
+
+The model's turns cost the most, then cursor travel (about 0.5 to 1 s per human-like move), then typing. In order of gain:
+
+1. **One look, one plan, one `act`.** Most tasks need 2 to 4 turns, not one turn per click.
+2. **Keyboard before mouse.** A shortcut costs a fraction of a second and needs no coordinates: `tab` through form fields instead of clicking each one, `cmd+l`, `cmd+f`, `enter`, arrow keys in lists.
+3. **`menu` for commands with no shortcut you know,** instead of opening menus by clicking.
+4. **Fewer moves.** Order clicks so the cursor travels short distances; click in place (no `x, y`) when the cursor is already there.
+5. **`size` only for small targets.** A small `size` slows the approach on purpose; leave it out for normal buttons.
+6. **Low detail, zoom only on doubt, `mark` only before risky clicks.**
+7. **Do not check every step.** Let the observation at the end of `act` show the result; add `wait_for` only where the next step depends on something loading.
+8. **Stay in one app.** Each switch costs a new look.
+9. **Record lessons** when something was slow, so the next task in that app skips the detour.
+
+## Games and other canvas apps
+
+Games draw everything themselves, so use foreground mode and plan from pixels. See `references/games.md` for click-to-move paths, walking with held keys, picking targets and repeated actions.
 
 ## Planning a good sequence
 

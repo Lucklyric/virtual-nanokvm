@@ -71,7 +71,7 @@ virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 | Tool | Does |
 |---|---|
 | `screenshot` | A low-detail look at the screen or one app window (even when covered), or a sharp zoom of part of an earlier shot, optionally with a crosshair where a click would land |
-| `act` | Up to 20 planned actions in one call (move, click, type, key, scroll, drag, wait), then a new low-detail look once the screen settles |
+| `act` | Up to 20 planned actions in one call (move, click, type, key, hold, menu, scroll, drag, wait), then a new low-detail look once the screen settles |
 | `list_windows` | App windows with ids and positions |
 | `mouse_move`, `click`, `drag`, `scroll`, `type_text`, `key` | Single actions, with an optional look afterwards |
 | `lessons` | Per-app notes on what made a task slow and what worked, kept on this Mac |
@@ -79,6 +79,21 @@ virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 | `doctor` | Checks permissions, display, driver input and Tailscale |
 
 Every image has a shot id, and coordinates are pixels of a named shot. vnkvm maps them to the screen, follows a window that moved, and refuses a window that changed size or a point another window covers. So an agent can look at 1024 px, zoom where it needs detail, and click from either image without mixing them up.
+
+### Background mode
+
+Tell the agent to work "in the background" and it passes `"mode": "background"`. vnkvm then leaves your cursor and your front app alone: it presses the control under the chosen pixel through Accessibility (the way VoiceOver does) and sends keys to that app only. You keep working while it runs.
+
+Tested on macOS with each app behind another window:
+
+| App | Click a control | Type into a field | Notes |
+|---|---|---|---|
+| Calculator | yes | n/a | `7 + 2 =` gave 9 |
+| TextEdit | yes (focuses the text) | yes | `cmd` shortcuts such as Select All do not arrive; app-wide menu commands (File > New) do, through a `menu` step |
+| Chrome (web page) | yes | yes | web buttons and links are focused, then pressed with Space or Enter |
+| VS Code (Electron) | yes (buttons, text fields) | yes, after the click focuses a field | the main code editor area exposes no field; VS Code may suggest its screen reader mode |
+
+Background mode cannot right-click (macOS brings the app forward for a context menu), double-click, drag or hover, and it cannot act on canvases such as games or maps, which have no controls. Use the default foreground mode for those.
 
 Screenshots cover one app's window, never the whole display, unless you allow it with `VNKVM_ALLOW_DISPLAY=1`. `list_windows` shows window titles only for the app the agent names.
 

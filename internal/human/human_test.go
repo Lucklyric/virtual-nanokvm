@@ -321,3 +321,32 @@ func TestClickBehaviorVaries(t *testing.T) {
 		t.Fatalf("behavior not random: %d/60 wobbles, %d/60 drifts", wobbles, drifts)
 	}
 }
+
+func TestRelayFollowsRemoteHand(t *testing.T) {
+	// A remote hand's path relayed event by event: the cursor tracks it
+	// closely despite acceleration and the one-tick lag.
+	for _, accel := range []float64{0, 0.05, 0.3} {
+		e, _, scr := newSim(1, Point{100, 100})
+		scr.accel = accel
+		worst := 0.0
+		for i := 1; i <= 60; i++ {
+			p := Point{100 + float64(i)*15, 100 + float64(i)*6}
+			if err := e.RelayMove(p); err != nil {
+				t.Fatal(err)
+			}
+			scr.sleep(context.Background(), 16*time.Millisecond)
+			if i > 3 {
+				worst = math.Max(worst, math.Hypot(scr.visible.X-p.X, scr.visible.Y-p.Y))
+			}
+		}
+		// Hold still: the cursor converges onto the last point.
+		last := Point{1000, 460}
+		for range 10 {
+			e.RelayMove(last)
+			scr.sleep(context.Background(), 16*time.Millisecond)
+		}
+		if d := math.Hypot(scr.visible.X-last.X, scr.visible.Y-last.Y); d > 1.5 || worst > 40 {
+			t.Fatalf("accel %.2f: final error %.1f, worst lag %.1f", accel, d, worst)
+		}
+	}
+}

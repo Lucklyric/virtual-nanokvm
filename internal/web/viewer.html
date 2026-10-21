@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vnkvm viewer</title>
+<style>
+  :root { --bg: #0f172a; --bar: #111827; --fg: #e5e7eb; --muted: #9ca3af; --accent: #2563eb; --on: #dc2626; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+  header { display: flex; gap: 12px; align-items: center; padding: 8px 16px; background: var(--bar); position: sticky; top: 0; }
+  header b { font-size: 15px; }
+  .badge { padding: 2px 8px; border-radius: 999px; background: #1f2937; color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  button { font: inherit; padding: 6px 14px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  button.on { background: var(--on); }
+  button[hidden] { display: none; }
+  main { padding: 12px 16px; }
+  #screen { display: block; width: 100%; height: auto; max-height: calc(100vh - 80px); object-fit: contain; border-radius: 6px; background: #000; user-select: none; -webkit-user-drag: none; }
+  #screen.control { cursor: none; outline: 2px solid var(--on); }
+  #msg { color: var(--muted); padding: 24px 0; }
+</style>
+</head>
+<body>
+<header>
+  <b>vnkvm</b>
+  <span class="badge" id="role">connecting</span>
+  <span class="badge" id="status"></span>
+  <span class="spacer"></span>
+  <button id="toggle" hidden>Take control</button>
+</header>
+<main>
+  <div id="msg"></div>
+  <img id="screen" alt="Live screen" draggable="false" hidden>
+</main>
+<script>
+(() => {
+  // The token rides in the URL fragment so it never reaches server logs.
+  const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
+  const q = "token=" + encodeURIComponent(token);
+  const $ = (id) => document.getElementById(id);
+  const img = $("screen"), toggle = $("toggle"), msg = $("msg");
+  let ws = null, controlling = false;
+
+  fetch("/api/info?" + q).then((r) => {
+    if (!r.ok) throw new Error("This link has no valid token.");
+    return r.json();
+  }).then((info) => {
+    $("role").textContent = info.role === "control" ? "control" : "view only";
+    $("status").textContent = `${info.width}×${info.height} · ${info.fps} fps`;
+    img.src = "/stream?" + q;
+    img.hidden = false;
+    if (info.role === "control") toggle.hidden = false;
+  }).catch((e) => { msg.textContent = e.message; $("role").textContent = "no access"; });
+
+  const send = (ev) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(ev)); };
+
+  function start() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(`${proto}//${location.host}/control?${q}`);
+    ws.onopen = () => { controlling = true; img.classList.add("control"); toggle.textContent = "Release control"; toggle.classList.add("on"); };
+    ws.onclose = () => { stop(false); };
+    ws.onerror = () => { msg.textContent = "Could not take control (someone else may be in control)."; };
+  }
+  function stop(close = true) {
+    if (close && ws) { send({ t: "release" }); ws.close(); }
+    ws = null; controlling = false;
+    img.classList.remove("control"); toggle.textContent = "Take control"; toggle.classList.remove("on");
+  }
+  toggle.onclick = () => (controlling ? stop() : (msg.textContent = "", start()));
+
+  // Pointer position as a fraction of the image, so display size never matters.
+  const frac = (e) => {
+    const r = img.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  };
+  let pending = null, last = null, settle = null, queued = false;
+  img.addEventListener("pointermove", (e) => {
+    if (!controlling) return;
+    pending = frac(e);
+    if (queued) return; // at most one move per animation frame
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      if (!pending) return;
+      last = pending; send({ t: "move", x: last.x, y: last.y }); pending = null;
+      // After the hand stops, repeat the spot a few times so the cursor settles on it.
+      clearInterval(settle); let n = 0;
+      settle = setInterval(() => { if (++n > 4 || !controlling) return clearInterval(settle); send({ t: "move", x: last.x, y: last.y }); }, 50);
+    });
+  });
+  const buttons = (e) => { if (controlling) { e.preventDefault(); send({ t: "move", ...frac(e) }); send({ t: "buttons", b: e.buttons }); } };
+  img.addEventListener("pointerdown", (e) => { img.setPointerCapture(e.pointerId); buttons(e); });
+  img.addEventListener("pointerup", buttons);
+  img.addEventListener("contextmenu", (e) => { if (controlling) e.preventDefault(); });
+  let wheelX = 0, wheelY = 0;
+  img.addEventListener("wheel", (e) => {
+    if (!controlling) return;
+    e.preventDefault();
+    const unit = e.deltaMode === 1 ? 1 : 40; // lines, or pixels per notch
+    wheelX += e.deltaX / unit; wheelY += e.deltaY / unit;
+    const dx = Math.trunc(wheelX), dy = Math.trunc(wheelY);
+    if (dx || dy) { wheelX -= dx; wheelY -= dy; send({ t: "wheel", dx, dy }); }
+  }, { passive: false });
+  const key = (down) => (e) => {
+    if (!controlling) return;
+    e.preventDefault();
+    send({ t: "key", code: e.code, down });
+  };
+  window.addEventListener("keydown", key(true));
+  window.addEventListener("keyup", key(false));
+  // Leaving the tab must not leave keys held on the Mac.
+  window.addEventListener("blur", () => send({ t: "release" }));
+})();
+</script>
+</body>
+</html>

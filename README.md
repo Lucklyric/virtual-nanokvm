@@ -1,6 +1,6 @@
 # virtual-nanokvm
 
-A software KVM for macOS. It lets an AI agent, or a script, use your Mac's mouse and keyboard the way a person does.
+A software KVM for macOS. It lets an AI agent, or a script, use your Mac's mouse and keyboard the way a person does, and lets you watch and control the Mac from a browser.
 
 Inspired by the [Sipeed NanoKVM](https://sipeed.com/nanokvm-go), but with no extra hardware: it runs locally on the Mac it controls.
 
@@ -69,6 +69,17 @@ virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 | `cursor_position` | Where the cursor is |
 
 Each position comes back both **global** (whole desktop) and **relative** (pixels in the screenshot). The mouse tools accept coordinates straight from a window's screenshot.
+
+### Watch and control from a browser
+
+```sh
+make service
+bin/vnkvm serve --input sys
+```
+
+It prints two links for your local network: a **control** link (watch, plus mouse and keyboard) and a **view** link (watch only). Open either on any device on the same network. Click **Take control** to drive the Mac; your own hand movement is relayed as-is. One person controls at a time, and every key and button is released when they leave.
+
+Flags: `--listen` (default `:8090`; use `127.0.0.1:8090` for this Mac only), `--fps` (default 10), `--width` (default 1280), `--token` and `--view-token` (random by default). The links travel over plain HTTP, so use it only on a network you trust. Some shortcuts such as `cmd+w` stay with the browser.
 
 ### Command line
 

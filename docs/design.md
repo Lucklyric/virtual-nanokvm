@@ -6,19 +6,20 @@ A software version of the [Sipeed NanoKVM-Go](https://sipeed.com/nanokvm-go). It
 
 - Input can arrive as a real USB HID device (driver input), so apps and the OS treat it like hardware. Synthetic system events (sys input) are the no-install alternative.
 - Mouse motion looks human: curved paths, natural speed, overshoot and correction. It never jumps.
-- Agents control the machine over MCP. People watch and control it over a LAN stream (v2).
+- Agents control the machine over MCP. People watch and control it from a browser on the local network.
 - Everything is local. No cloud relay.
 
 ## Architecture
 
 ```
- MCP client (agent)          browser viewer (v2)
-        │ stdio                     │ LAN, token auth
+ MCP client (agent)          browser viewer
+        │ stdio                     │ LAN: MJPEG stream + WebSocket, token auth
         ▼                           ▼
  ┌──────────────────── vnkvm (user, Go) ────────────────────┐
  │ mcpserver: tools, screenshot-pixel ⇄ display-point maps   │
  │ human:     trajectories, click/scroll/typing rhythm       │
- │ screen:    cursor position (CoreGraphics), screencapture  │
+ │ web:       viewer page, stream, control relay             │
+ │ screen:    cursor, windows, screencapture, ScreenCaptureKit│
  │ hid:       report client                                  │
  └──────────────────────────┬───────────────────────────────┘
                             │ unix socket, mode 0600, owned by the user
@@ -97,6 +98,14 @@ Typing presses shift before a shifted key. Each key is held 40–95 ms. Gaps bet
 - **Conversion:** `global = origin + pixel × scale`. Every screenshot returns its `origin` and `scale`. Locations come back with both `global` and `relative` (relative is left out when the point is outside the frame).
 - **Mouse tools take relative coordinates** for the frame they name, so an agent can act straight from a window screenshot. A window's bounds are read again at action time, so a window that has moved still works. A point that another window covers is refused, since the click would land on the other window.
 
+## Browser viewer (`vnkvm serve`)
+
+- **Stream:** ScreenCaptureKit captures the main display in-process (cursor included) as a JPEG at `--width` (about 40 ms per frame at 1280 px). Frames go out as an MJPEG stream (`multipart/x-mixed-replace`) at `--fps`. Capture runs only while someone watches, and a slow viewer gets the newest frame, never a backlog.
+- **Roles:** two tokens. The view token can watch. The control token can also drive input. The token rides in the link's URL fragment, so it never shows up in server logs, and the page passes it to `/stream` and `/control`. Plain HTTP: use it on a trusted network, or bind `127.0.0.1`.
+- **Control:** a WebSocket (`/control`) carries pointer position (as a fraction of the image), buttons, wheel notches and physical key codes (`KeyboardEvent.code`, mapped to HID usages). Only one controller at a time; a second gets `409`. When the controller leaves, or the tab loses focus, every key and button is released.
+- **Relay, not generation:** a person's hand already moves like a person, so the engine passes it through (`RelayMove`, `RelayButtons`, `RelayWheel`, `RelayKeys`). Moves feed forward from the last relayed point with a gentle pull toward the real cursor. The engine learns the acceleration gain as it goes, and closes the gap in half steps once the hand holds still. After the hand stops, the viewer repeats the final spot a few times so the cursor settles on it.
+- **Shared engine:** relayed input shares the engine's lock and button state with agent actions, so reports never interleave. An agent action running in another process sees the remote hand as a person taking over, and stops.
+
 ## Plugin packaging
 
 The repo is a plugin marketplace for both Claude Code and Codex. Both install straight from git.
@@ -128,6 +137,7 @@ Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds 
 
 ## Roadmap
 
-- **v1 (this)**: both input paths, human-like engine with take-over detection, MCP over stdio, screen and window screenshots.
-- **v2: streaming and remote control**. ScreenCaptureKit with VideoToolbox H.264, sent over WebRTC (MJPEG as a first step) to a LAN web viewer. Viewers get view-only or control roles behind token auth, and control goes through the same `human` engine.
+- **v1**: both input paths, human-like engine with take-over detection, MCP over stdio, screen and window screenshots.
+- **v2 (this)**: browser viewer with an MJPEG stream and remote control, token roles, one controller at a time.
+- **v2.1**: H.264 (VideoToolbox) over WebRTC for smoother, lower-bandwidth video; HTTPS.
 - **v3**: launchd units for the bridge and daemon, full-display capture of secondary screens (windows on any screen already work), and Linux (USB gadget on `dummy_hcd` or USB/IP) and Windows targets.

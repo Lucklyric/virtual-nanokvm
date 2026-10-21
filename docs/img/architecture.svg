@@ -1,31 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 470" width="880" height="470">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 500" width="880" height="500">
 <style>text{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;fill:#1e293b}.t{font-size:15px;font-weight:600}.s{font-size:12.5px;fill:#475569}.c{text-anchor:middle}</style>
 <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#64748b"/></marker></defs>
 <rect width="100%" height="100%" rx="12" fill="#ffffff" stroke="#e2e8f0"/>
-<rect x="190" y="24" width="220" height="50" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
-<text x="300" y="54" class="t c">AI agent (MCP)</text>
-<rect x="470" y="24" width="220" height="50" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
-<text x="580" y="54" class="t c">CLI: move / click / type</text>
-<line x1="300" y1="74" x2="380" y2="112" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
-<line x1="580" y1="74" x2="500" y2="112" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
-<rect x="130" y="114" width="620" height="78" rx="10" fill="#eff6ff" stroke="#93c5fd"/>
-<text x="440" y="142" class="t c">vnkvm: human-like input engine</text>
-<text x="440" y="164" class="s c">curved paths · natural speed · overshoot and correction · typing rhythm</text>
-<text x="440" y="182" class="s c">same for both input paths · stops when you grab the mouse</text>
-<line x1="320" y1="192" x2="240" y2="238" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
-<line x1="560" y1="192" x2="640" y2="238" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
-<rect x="40" y="240" width="370" height="120" rx="10" fill="#f0fdf4" stroke="#86efac"/>
-<text x="225" y="268" class="t c">sys input</text>
-<text x="225" y="292" class="s c">synthetic system events (CGEventPost)</text>
-<text x="225" y="312" class="s c">no install, needs Accessibility permission</text>
-<text x="225" y="332" class="s c">apps can tell the events are software</text>
-<rect x="470" y="240" width="370" height="120" rx="10" fill="#fff7ed" stroke="#fdba74"/>
-<text x="655" y="268" class="t c">driver input</text>
-<text x="655" y="292" class="s c">vnkvm-hid-bridge (root) → Karabiner</text>
-<text x="655" y="312" class="s c">VirtualHIDDevice → virtual USB keyboard + mouse</text>
-<text x="655" y="332" class="s c">macOS sees real hardware</text>
-<line x1="225" y1="360" x2="380" y2="404" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
-<line x1="655" y1="360" x2="500" y2="404" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
-<rect x="250" y="406" width="380" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
-<text x="440" y="433" class="t c">macOS: one cursor, one keyboard focus</text>
+<rect x="40" y="24" width="230" height="56" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+<text x="155" y="48" class="t c">AI agent (MCP)</text>
+<text x="155" y="67" class="s c">screenshots + actions</text>
+<rect x="325" y="24" width="230" height="56" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+<text x="440" y="48" class="t c">CLI</text>
+<text x="440" y="67" class="s c">move / click / type</text>
+<rect x="610" y="24" width="230" height="56" rx="8" fill="#f5f3ff" stroke="#c4b5fd"/>
+<text x="725" y="48" class="t c">Browser viewer</text>
+<text x="725" y="67" class="s c">live stream + remote control</text>
+<line x1="155" y1="80" x2="300" y2="124" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="440" y1="80" x2="440" y2="124" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="725" y1="80" x2="580" y2="124" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="126" width="620" height="78" rx="10" fill="#eff6ff" stroke="#93c5fd"/>
+<text x="440" y="154" class="t c">vnkvm input engine</text>
+<text x="440" y="176" class="s c">agents and CLI: generated human-like paths, clicks and typing</text>
+<text x="440" y="194" class="s c">browser: your own hand relayed as-is · stops when someone grabs the mouse</text>
+<line x1="320" y1="204" x2="240" y2="250" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="560" y1="204" x2="640" y2="250" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="40" y="252" width="370" height="120" rx="10" fill="#f0fdf4" stroke="#86efac"/>
+<text x="225" y="280" class="t c">sys input</text>
+<text x="225" y="304" class="s c">synthetic system events (CGEventPost)</text>
+<text x="225" y="324" class="s c">no install, needs Accessibility permission</text>
+<text x="225" y="344" class="s c">apps can tell the events are software</text>
+<rect x="470" y="252" width="370" height="120" rx="10" fill="#fff7ed" stroke="#fdba74"/>
+<text x="655" y="280" class="t c">driver input</text>
+<text x="655" y="304" class="s c">vnkvm-hid-bridge (root) → Karabiner</text>
+<text x="655" y="324" class="s c">VirtualHIDDevice → virtual USB keyboard + mouse</text>
+<text x="655" y="344" class="s c">macOS sees real hardware</text>
+<line x1="225" y1="372" x2="380" y2="416" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="655" y1="372" x2="500" y2="416" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="418" width="380" height="56" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+<text x="440" y="442" class="t c">macOS: one cursor, one keyboard focus</text>
+<text x="440" y="461" class="s c">screen captured back for screenshots and the stream</text>
 </svg>

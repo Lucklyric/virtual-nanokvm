@@ -63,6 +63,12 @@ type Engine struct {
 	buttons uint32
 	gain    float64 // estimated cursor points moved per report unit
 	anchor  Point   // where the cursor should be while the engine holds it still
+
+	relayLast  Point     // last point a remote hand was relayed to
+	relayAt    time.Time // when
+	relayFrom  Point     // where the cursor was then
+	relaySentX int       // report units sent for it
+	relaySentY int
 }
 
 // New returns an Engine with real time and a random seed.

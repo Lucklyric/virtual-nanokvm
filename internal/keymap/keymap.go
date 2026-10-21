@@ -92,3 +92,47 @@ func Combo(spec string) ([]uint8, Stroke, error) {
 	}
 	return nil, Stroke{}, fmt.Errorf("unknown key %q in %q", key, spec)
 }
+
+// Modifier bits for browser KeyboardEvent.code values of modifier keys.
+var codeModifiers = map[string]uint8{
+	"ControlLeft": hid.LeftControl, "ControlRight": hid.LeftControl,
+	"ShiftLeft": hid.LeftShift, "ShiftRight": hid.LeftShift,
+	"AltLeft": hid.LeftOption, "AltRight": hid.LeftOption,
+	"MetaLeft": hid.LeftCommand, "MetaRight": hid.LeftCommand,
+}
+
+var codeUsages = map[string]uint16{
+	"Enter": 0x28, "Escape": 0x29, "Backspace": 0x2a, "Tab": 0x2b, "Space": 0x2c,
+	"Minus": 0x2d, "Equal": 0x2e, "BracketLeft": 0x2f, "BracketRight": 0x30,
+	"Backslash": 0x31, "Semicolon": 0x33, "Quote": 0x34, "Backquote": 0x35,
+	"Comma": 0x36, "Period": 0x37, "Slash": 0x38, "CapsLock": 0x39,
+	"Home": 0x4a, "PageUp": 0x4b, "Delete": 0x4c, "End": 0x4d, "PageDown": 0x4e,
+	"ArrowRight": 0x4f, "ArrowLeft": 0x50, "ArrowDown": 0x51, "ArrowUp": 0x52,
+}
+
+// Code maps a browser KeyboardEvent.code (a physical key, independent of
+// layout) to a HID usage, or to a modifier bit for modifier keys.
+func Code(code string) (usage uint16, modifier uint8, ok bool) {
+	if m, ok := codeModifiers[code]; ok {
+		return 0, m, true
+	}
+	if u, ok := codeUsages[code]; ok {
+		return u, 0, true
+	}
+	if len(code) == 4 && code[:3] == "Key" && code[3] >= 'A' && code[3] <= 'Z' {
+		return 0x04 + uint16(code[3]-'A'), 0, true
+	}
+	if len(code) == 6 && code[:5] == "Digit" && code[5] >= '0' && code[5] <= '9' {
+		if code[5] == '0' {
+			return 0x27, 0, true
+		}
+		return 0x1e + uint16(code[5]-'1'), 0, true
+	}
+	if len(code) >= 2 && code[0] == 'F' {
+		var n int
+		if _, err := fmt.Sscanf(code[1:], "%d", &n); err == nil && n >= 1 && n <= 12 {
+			return 0x3a + uint16(n-1), 0, true
+		}
+	}
+	return 0, 0, false
+}

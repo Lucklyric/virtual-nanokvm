@@ -59,17 +59,20 @@ ln -sf "$HOME_DIR/bin/vnkvm" "$BIN_DIR/vnkvm"
 
 if [ "$WANT_CLAUDE" = 1 ]; then
 	if command -v claude >/dev/null 2>&1; then
-		say "Adding the Claude Code plugin..."
+		say "Adding or updating the Claude Code plugin..."
 		claude plugin marketplace add Lucklyric/virtual-nanokvm || true
+		claude plugin marketplace update virtual-nanokvm
 		claude plugin install vnkvm@virtual-nanokvm
+		claude plugin update vnkvm@virtual-nanokvm
 	else
 		echo "Claude Code not found; skipped. Later: /plugin marketplace add Lucklyric/virtual-nanokvm"
 	fi
 fi
 if [ "$WANT_CODEX" = 1 ]; then
 	if command -v codex >/dev/null 2>&1; then
-		say "Adding the Codex plugin..."
+		say "Adding or updating the Codex plugin..."
 		codex plugin marketplace add "$REPO" || true
+		codex plugin marketplace upgrade virtual-nanokvm
 		codex plugin add vnkvm@virtual-nanokvm
 	else
 		echo "Codex not found; skipped."

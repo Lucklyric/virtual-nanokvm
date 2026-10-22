@@ -5,6 +5,8 @@
 # VNKVM_INPUT picks the input path: sys (default, needs Accessibility) or
 # driver (virtual USB HID, needs the Karabiner driver and vnkvm-hid-bridge).
 set -e
+# Apps started from the Dock get a minimal PATH; add where Go usually lives.
+PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/local/go/bin:$HOME/go/bin"
 root=$(cd "$(dirname "$0")/.." && pwd)
 bin="$root/bin/vnkvm"
 

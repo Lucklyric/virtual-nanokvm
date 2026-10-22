@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"image"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -165,6 +166,7 @@ type actArgs struct {
 	Steps   []step            `json:"steps,omitempty" jsonschema:"actions in order; the sequence stops at the first failure"`
 	Observe *bool             `json:"observe,omitempty" jsonschema:"return a new low-detail shot after the steps (default true)"`
 	Width   int               `json:"width,omitempty" jsonschema:"width of that shot (default 1024)"`
+	MaxAge  int               `json:"max_age,omitempty" jsonschema:"refuse coordinates from shots older than this many milliseconds, for targets that move (characters, live feeds); default any age"`
 	modeArg
 }
 
@@ -179,7 +181,7 @@ type listArgs struct {
 }
 
 type lessonArgs struct {
-	App  string   `json:"app" jsonschema:"the app the lessons are about, e.g. Safari; all for rules that hold in every app"`
+	App  string   `json:"app,omitempty" jsonschema:"the app the lessons are about, e.g. Safari; all for rules that hold in every app; omit to list the apps that have lessons, tasks or recipes"`
 	Add  string   `json:"add,omitempty" jsonschema:"a new lesson: what slowed you down and what worked, one line, no personal content"`
 	Set  []string `json:"set,omitempty" jsonschema:"replace all lessons for this app, to merge, rewrite or drop lines; keep a line's v tag when you keep the line"`
 	Done string   `json:"done,omitempty" jsonschema:"the task just finished, in a few generic words (no names, queries or window text); records what it cost under the current lessons"`
@@ -187,8 +189,10 @@ type lessonArgs struct {
 
 type lessonReport struct {
 	App      string        `json:"app"`
-	Version  int           `json:"version" jsonschema:"bumped by every add or set; each lesson line is tagged with the version that added it"`
+	Version  int           `json:"version" jsonschema:"bumped by every set (a revision); each lesson line is tagged with the version it was added under"`
 	Lessons  []string      `json:"lessons"`
+	Rules    []string      `json:"rules_all,omitempty" jsonschema:"the lessons of app all, which hold in every app"`
+	Apps     []appSummary  `json:"apps,omitempty" jsonschema:"without app: every app with lessons, tasks or recipes"`
 	Tasks    []task        `json:"recent_tasks,omitempty" jsonschema:"the last finished tasks in this app and what they cost"`
 	Versions []versionStat `json:"by_version,omitempty" jsonschema:"average cost of the tasks run under each lessons version"`
 	Review   string        `json:"review,omitempty" jsonschema:"set when the lessons are due for a revision"`
@@ -236,7 +240,7 @@ type doctorReport struct {
 
 // New builds the MCP server.
 func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.5.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.6.0"}, nil)
 	reg := &shots{}
 	st := &stats{}
 	// Every tool call is a model turn: the cost the lessons try to bring down.
@@ -250,8 +254,8 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 	})
 
 	// do runs steps, then optionally looks again. Every action tool uses it.
-	do := func(ctx context.Context, steps []step, defShot int, observe bool, width int, batch bool, mode string) (*mcp.CallToolResult, actReport, error) {
-		r := &runner{e: e, scr: scr, reg: reg, ax: opt.Background}
+	do := func(ctx context.Context, steps []step, defShot int, observe bool, width int, batch bool, mode string, maxAge int) (*mcp.CallToolResult, actReport, error) {
+		r := &runner{e: e, scr: scr, reg: reg, ax: opt.Background, maxAge: time.Duration(maxAge) * time.Millisecond}
 		switch mode {
 		case "", "foreground":
 		case "background":
@@ -347,9 +351,20 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 		Description: "Read or record lessons for one app: what slowed the work down and what worked. " +
 			"Read them before planning in that app. Add one when a task was slow, a failure repeated, or a server hint says the loop is inefficient. " +
 			"At the end of a task, call it with done: it records what the task cost under the current lessons, and says when the lessons are due for a review. " +
-			"Use app all for rules that hold in every app. " +
+			"Use app all for rules that hold in every app; every app read also returns them. Without app, it lists the apps that have lessons, tasks or recipes. " +
+			"add and done can go in one call. " +
 			"Also returns the recent tasks, the cost per lessons version, and this session's counters. Lessons stay on this Mac; never record passwords, personal text or window contents.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in lessonArgs) (*mcp.CallToolResult, lessonReport, error) {
+		if in.App == "" {
+			if in.Add != "" || in.Set != nil || in.Done != "" {
+				return nil, lessonReport{}, fmt.Errorf("give the app name, e.g. Safari")
+			}
+			apps, err := listApps()
+			if err != nil {
+				return nil, lessonReport{}, err
+			}
+			return nil, lessonReport{Apps: apps, Stats: st.snapshot()}, nil
+		}
 		var lines []string
 		var version int
 		var err error
@@ -365,6 +380,9 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 			return nil, lessonReport{}, err
 		}
 		out := lessonReport{App: in.App, Version: version, Lessons: lines}
+		if !strings.EqualFold(in.App, globalApp) {
+			out.Rules, _, _ = readLessons(globalApp)
+		}
 		var tasks []task
 		if in.Done != "" {
 			if len(in.Done) > 120 {
@@ -482,7 +500,7 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 			}
 			steps, app = append(pre, steps...), sh.App
 		}
-		res, rep, err := do(ctx, steps, in.Shot, observe, in.Width, true, in.Mode)
+		res, rep, err := do(ctx, steps, in.Shot, observe, in.Width, true, in.Mode, in.MaxAge)
 		if err != nil || res == nil {
 			return res, rep, err
 		}
@@ -575,7 +593,7 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 		Name:        "mouse_move",
 		Description: "Move the mouse to a pixel of a shot along a human-like path.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in moveArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "move", X: &in.X, Y: &in.Y, Size: in.Size}}, in.Shot, in.Observe, 0, false, in.Mode)
+		return do(ctx, []step{{Do: "move", X: &in.X, Y: &in.Y, Size: in.Size}}, in.Shot, in.Observe, 0, false, in.Mode, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -591,35 +609,35 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 		case in.Count == 2:
 			st.Do = "double_click"
 		}
-		return do(ctx, []step{st}, in.Shot, in.Observe, 0, false, in.Mode)
+		return do(ctx, []step{st}, in.Shot, in.Observe, 0, false, in.Mode, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "drag",
 		Description: "Hold the left button at the current position, move to a pixel of a shot and release. Move to the start first.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in dragArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "drag", X: &in.X, Y: &in.Y}}, in.Shot, in.Observe, 0, false, in.Mode)
+		return do(ctx, []step{{Do: "drag", X: &in.X, Y: &in.Y}}, in.Shot, in.Observe, 0, false, in.Mode, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "scroll",
 		Description: "Turn the scroll wheel at the current cursor position.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in scrollArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "scroll", DX: in.DX, DY: in.DY}}, 0, in.Observe, 0, false, in.Mode)
+		return do(ctx, []step{{Do: "scroll", DX: in.DX, DY: in.DY}}, 0, in.Observe, 0, false, in.Mode, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "type_text",
 		Description: "Type text with human rhythm into the focused field.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in typeArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "type", Text: in.Text, WPM: in.WPM}}, 0, in.Observe, 0, false, in.Mode)
+		return do(ctx, []step{{Do: "type", Text: in.Text, WPM: in.WPM}}, 0, in.Observe, 0, false, in.Mode, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "key",
 		Description: "Press a key or key combination such as enter, escape, cmd+c, cmd+shift+4.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in keyArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "key", Keys: in.Keys}}, 0, in.Observe, 0, false, in.Mode)
+		return do(ctx, []step{{Do: "key", Keys: in.Keys}}, 0, in.Observe, 0, false, in.Mode, 0)
 	})
 
 	return s

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -20,7 +21,7 @@ func TestLessonsAddDedupeAndCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines, v, _ := addLesson("safari", "use cmd+L to reach the address bar") // same app, same lesson
-	if len(lines) != 1 || v != 1 || !strings.HasPrefix(lines[0], "v1 ") {
+	if len(lines) != 1 || v != 0 || !strings.HasPrefix(lines[0], "v0 ") {
 		t.Fatalf("duplicate kept or untagged: v%d %v", v, lines)
 	}
 	for i := 0; i < maxLessons+5; i++ {
@@ -174,10 +175,13 @@ func TestSetKeepsTagsAndBumpsVersion(t *testing.T) {
 	addLesson("Notes", "first")
 	lines, _, _ := addLesson("Notes", "second")
 	lines, v, err := setLessons("Notes", []string{lines[0], "merged rule"})
-	if err != nil || v != 3 || !strings.HasPrefix(lines[0], "v1 ") || !strings.HasPrefix(lines[1], "v3 ") {
+	if err != nil || v != 1 || !strings.HasPrefix(lines[0], "v0 ") || !strings.HasPrefix(lines[1], "v1 ") {
 		t.Fatalf("set: v%d %v %v", v, lines, err)
 	}
-	if _, v, _ := readLessons("Notes"); v != 3 {
+	if lines, v, _ = addLesson("Notes", "between revisions"); v != 1 || !strings.HasPrefix(lines[2], "v1 ") {
+		t.Fatalf("add changed the version or tag: v%d %v", v, lines)
+	}
+	if _, v, _ := readLessons("Notes"); v != 1 {
 		t.Fatalf("version read back as %d", v)
 	}
 }
@@ -187,6 +191,8 @@ func TestDoneRecordsTasksAndAsksForReview(t *testing.T) {
 	scr := &fakeScreen{windows: []screen.Window{{ID: 7, PID: 42, App: "Notes", X: 100, Y: 80, Width: 800, Height: 600}}}
 	cs := connect(t, scr, Options{})
 	callTool(t, cs, "lessons", map[string]any{"app": "Notes", "add": "use cmd+f"})
+	callTool(t, cs, "lessons", map[string]any{"app": "Notes", "set": []string{"use cmd+f"}}) // v1
+	callTool(t, cs, "lessons", map[string]any{"app": "all", "add": "prefer the keyboard"})
 
 	var last *mcp.CallToolResult
 	for i := 0; i < 5; i++ {
@@ -207,6 +213,13 @@ func TestDoneRecordsTasksAndAsksForReview(t *testing.T) {
 	}
 	if all, _ := readTasks(globalApp); len(all) != 5 {
 		t.Fatalf("global rules saw %d tasks", len(all))
+	}
+	if !strings.Contains(out, "prefer the keyboard") {
+		t.Fatalf("app read lacks the all rules: %s", out)
+	}
+	list := fmt.Sprint(callTool(t, cs, "lessons", nil).StructuredContent)
+	if !strings.Contains(list, "app:notes") || !strings.Contains(list, "review_due:true") || !strings.Contains(list, "app:all") {
+		t.Fatalf("app list: %s", list)
 	}
 }
 
@@ -290,5 +303,43 @@ func TestExpectMissStopsTheSequence(t *testing.T) {
 	out := callTool(t, cs, "lessons", map[string]any{"app": "Notes"})
 	if s := fmt.Sprint(out.StructuredContent); !strings.Contains(s, "expect_misses:1") {
 		t.Fatalf("miss not counted: %s", s)
+	}
+}
+
+func TestWaitsWatchAWindowOnAnotherDisplay(t *testing.T) {
+	// A window left of the main display: the waits watch the window itself,
+	// so they time out on a still window instead of failing to watch.
+	scr := &fakeScreen{windows: []screen.Window{{ID: 7, PID: 42, App: "Game", X: -2029, Y: 442, Width: 800, Height: 600}}}
+	cs := connect(t, scr, Options{})
+	callTool(t, cs, "screenshot", map[string]any{"app": "Game"})
+	res := callTool(t, cs, "act", map[string]any{"shot": 1, "observe": false, "steps": []map[string]any{
+		{"do": "key", "keys": "a"},
+		{"do": "expect", "until": "change", "ms": 300},
+	}})
+	if s := text(res); !strings.Contains(s, "timed out: no change") || strings.Contains(s, "cannot watch") {
+		t.Fatalf("window off the main display: %s", s)
+	}
+	scr.windows = nil // closed
+	res = callTool(t, cs, "act", map[string]any{"shot": 1, "observe": false, "steps": []map[string]any{
+		{"do": "key", "keys": "a"},
+		{"do": "expect", "until": "change", "ms": 300},
+	}})
+	if s := text(res); !strings.Contains(s, "window 7 is gone") || !strings.Contains(s, "not checked") {
+		t.Fatalf("closed window: %s", s)
+	}
+}
+
+func TestMaxAgeRefusesAnOldShot(t *testing.T) {
+	scr := &fakeScreen{windows: []screen.Window{{ID: 7, PID: 42, App: "Notes", X: 100, Y: 80, Width: 800, Height: 600}}}
+	bg := &fakeBackground{}
+	cs := connect(t, scr, Options{Background: bg})
+	callTool(t, cs, "screenshot", map[string]any{"app": "Notes"})
+	time.Sleep(30 * time.Millisecond)
+	res := callTool(t, cs, "act", map[string]any{"shot": 1, "mode": "background", "max_age": 10, "steps": []map[string]any{{"do": "click", "x": 5, "y": 5}}})
+	if !res.IsError || !strings.Contains(text(res), "stale observation") || len(bg.calls) != 0 {
+		t.Fatalf("old shot used: %s", text(res))
+	}
+	if res := callTool(t, cs, "act", map[string]any{"shot": 1, "mode": "background", "observe": false, "steps": []map[string]any{{"do": "click", "x": 5, "y": 5}}}); res.IsError {
+		t.Fatalf("without max_age: %s", text(res))
 	}
 }

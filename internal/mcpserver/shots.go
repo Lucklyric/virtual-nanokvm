@@ -6,6 +6,7 @@ import (
 	"image"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/Lucklyric/virtual-nanokvm/internal/human"
 	"github.com/Lucklyric/virtual-nanokvm/internal/screen"
@@ -37,6 +38,7 @@ type shot struct {
 	Scale   float64 // points per image pixel
 	FX, FY  float64 // frame origin when taken, global points
 	Cropped bool
+	At      time.Time // when it was captured
 }
 
 type shots struct {
@@ -188,6 +190,7 @@ func take(ctx context.Context, scr Screen, reg *shots, req shotRequest) (*shot, 
 		return nil, nil, fmt.Errorf("the region is outside the frame")
 	}
 
+	sh.At = time.Now()
 	raw, err := scr.Capture(ctx, sh.Window)
 	if err != nil {
 		return nil, nil, err

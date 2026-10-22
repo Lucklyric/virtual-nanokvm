@@ -386,8 +386,15 @@ func (e *Engine) settle(ctx context.Context, target Point) (Point, error) {
 		}
 		last = p
 	}
+	if off := math.Hypot(target.X-last.X, target.Y-last.Y); off > settleTolerance {
+		return last, fmt.Errorf("cursor stopped %.1f pt short of (%.0f, %.0f) after its corrections; nothing was clicked", off, target.X, target.Y)
+	}
 	return last, nil
 }
+
+// settleTolerance is how far from the target, in points, the cursor may end
+// once the corrections run out. Within one pixel either way is a hit.
+const settleTolerance = 2.0
 
 // corrective sizes a correction: about half the remaining error, at least one
 // unit, so it converges without bouncing.

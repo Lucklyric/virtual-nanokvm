@@ -1,6 +1,6 @@
 ---
 name: vnkvm
-description: Operate macOS apps through the vnkvm MCP tools (screenshot, act, click, type_text, key, scroll, drag), in the foreground with the real cursor or in the background without it. Use when a task needs clicking, typing or reading something on screen in a desktop app or a game.
+description: Operate macOS apps through the vnkvm MCP tools (screenshot, act, recipes, lessons, click, type_text, key), in the foreground with the real cursor or in the background without it. Use when a task needs clicking, typing or reading something on screen in a desktop app, including "in the background", "without taking my mouse" or "while I work", and when the person asks to repeat something "the same way as last time" (recipes) or to review how vnkvm work has gone (lessons).
 ---
 
 # Using vnkvm
@@ -19,12 +19,14 @@ If a tool fails, or on first use, call `doctor` (with `fix: true` to raise the m
 ## Shots and coordinates
 
 - Every image has a shot id. Coordinates are always pixels of a named shot: pass `shot` with every `x, y`.
+- Each step reports how old its shot was. For targets that move on their own (characters, live feeds, animations), pass `max_age` (milliseconds) to `act`: a shot older than that is refused before anything moves, and you take a new one.
+- In the foreground each click reports where the cursor landed when it was off by half a point or more. If the cursor stops short of the target, nothing is clicked and the step fails.
 - The server maps them to the screen. It follows a window that moved since the shot, and refuses a window that changed size or a point another window covers. In those cases take a new shot.
 - A zoom is its own shot with its own pixels. Never reuse coordinates from one shot with another shot's id.
 
 ## The loop
 
-0. **Read the lessons.** Call `lessons` with the app name, and once per session with `all` (rules for every app). Apply them before planning.
+0. **Read the lessons.** Call `lessons` with the app name. The result also holds `rules_all`, the rules for every app. Apply both before planning.
 1. **Look low, at one app.** `screenshot` with `app` (or `window_id` from `list_windows`) at the default 1024 px. Screenshots cover one app's window only; whole-display capture is off unless the person turned it on. Look only at the app the task needs. The result lists the app's saved recipes: if one fits the situation, run it (see Recipes) instead of planning from scratch.
 2. **Plan a sequence, with predictions.** Before acting, write down the steps and what the screen should look like after each one. Put in one `act` call every step whose target you can already see. Where you can predict what a step opens and where the next target will be, chain past it with an `expect` step (see Predict, then chain).
 3. **Zoom only when needed.** If a target is small, its text is hard to read, or two targets sit close together, call `screenshot` with `shot` and `region` around it. To check aim before an important click, call `screenshot` with `shot` and `mark` at the planned pixel: the crosshair shows where it will land.
@@ -82,21 +84,22 @@ After each step, predict the next screen. When the prediction is confident (a me
 - `{"do": "expect", "until": "change", "region": [x, y, w, h]}` waits until that part of the shot changes. `region` is in the shot's pixels; leave it out to watch the whole window.
 - `{"do": "expect", "until": "stable"}` waits until the screen stops moving.
 - If the prediction fails within `ms` (default 3000), the sequence stops there: the steps after it never run on a wrong screen, and the returned shot shows what happened instead.
+- The waits watch the app's own window, on any display. If the window cannot be watched (it closed, or capture failed), the step says "cannot watch" and the sequence stops; that is not a missed prediction, so look again before deciding what happened.
 
 `wait_for` waits the same way but continues when nothing changes; use it only where the next steps are safe either way. The counters (`expects`, `expect_misses`) show how often your predictions hold. When they mostly hold, chain longer; when they miss, chain shorter in that app and record why.
 
-Example: TextEdit, shot 4 (1024 px wide). Export as PDF: the save sheet is predicted to slide down from the top of the window with the name field focused, so the name and `enter` follow in the same call.
+Example: TextEdit, shot 4 (1024 px wide). Find a word: the find bar is predicted to open at the top of the window with its field focused, so the search text and `enter` (find next, which changes nothing) follow in the same call.
 
 ```json
 {"shot": 4, "steps": [
-  {"do": "menu", "menu": "File > Export as PDF…"},
-  {"do": "expect", "until": "change", "region": [0, 0, 1024, 200]},
-  {"do": "wait_for", "until": "stable"},
-  {"do": "key", "keys": "cmd+a"},
-  {"do": "type", "text": "report"},
+  {"do": "key", "keys": "cmd+f"},
+  {"do": "expect", "until": "change", "region": [0, 0, 1024, 120]},
+  {"do": "type", "text": "budget"},
   {"do": "key", "keys": "enter"}
 ]}
 ```
+
+Never chain past an `expect` into a step that saves, sends, deletes or submits; stop before it, as Care says.
 
 ## Recipes
 
@@ -124,12 +127,13 @@ Example: search from a Safari window seen in shot 4. Only the keyboard is needed
 Lessons are rules that improve with use. The server measures each task, and the lessons are revised against those measurements.
 
 1. **During a task**, the server adds an `Efficiency:` hint when the loop looks slow: three looks without an action, three single actions in a row, or the same failure twice. When you see one, or a step needed a detour, record a one-line lesson with `add`: what slowed you down and what worked (for example: "The search field needs a click before cmd+f works; then one act call does the whole search."). Rules that hold in every app go to app `all`.
-2. **At the end of every task**, call `lessons` with the app and `done` (a few generic words, such as "export a note as PDF"). The server records what the task cost (tool calls, shots, steps per call, failures, missed predictions, recipe runs) under the current lessons version.
+2. **At the end of every task**, call `lessons` with the app and `done` (with `add` in the same call when there is a lesson) (a few generic words, such as "export a note as PDF"). The server records what the task cost (tool calls, shots, steps per call, failures, missed predictions, recipe runs) under the current lessons version.
 3. **When the result has `review`**, revise the lessons before the next task. The server asks every fifth task on one version, and when the current version costs clearly more tool calls per task than the previous one. Compare `by_version` and `recent_tasks`:
    - Each line is tagged with the version that added it (`v3 2026-10-21: ...`). If a version made tasks slower, rewrite or drop its lines.
    - Keep lines from versions that made tasks faster. Merge duplicates. Turn repeated lessons into a recipe or a rule in `all`.
-   - Save with `set`, keeping the tag of each line you keep unchanged. The version goes up, and the next tasks measure it.
+   - Save with `set`, keeping the tag of each line you keep unchanged. Only `set` raises the version; lines added with `add` belong to the version in force. The next tasks measure the new version.
 4. Read the comparison with care: tasks differ. A slower version on harder tasks is not a worse version.
+5. **When the person asks for a review** (or runs `/vnkvm:review`), call `lessons` without `app` to list every app, then review `all` and each app with `review_due`.
 
 Keep lessons short and general. Never record passwords, personal text, names, or anything read from the window.
 

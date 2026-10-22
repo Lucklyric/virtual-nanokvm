@@ -17,8 +17,8 @@ import (
 // what worked, so the next task in that app plans better. They live on this
 // Mac only, outside the plugin and the source checkout, which updates replace.
 //
-// Lessons are versioned: every change bumps the version, and each line is
-// tagged with the version that added it. Task records (one per finished task,
+// Lessons are versioned: each revision (set) bumps the version, and each line
+// is tagged with the version it was added under. Task records (one per finished task,
 // with what it cost) carry the version in force, so a set of lessons can be
 // judged by the tasks run under it and a bad change traced to its lines. The
 // app name "all" holds rules for every app.
@@ -119,7 +119,8 @@ func addLesson(app, text string) ([]string, int, error) {
 			return lines, version, nil // already known
 		}
 	}
-	version++
+	// A lesson added between revisions belongs to the version in force, so
+	// that version's task records measure it too.
 	lines = append(lines, tag(version, text))
 	return lines, version, writeLessons(app, lines, version)
 }
@@ -143,6 +144,44 @@ func setLessons(app string, set []string) ([]string, int, error) {
 		lines = append(lines, l)
 	}
 	return lines, version, writeLessons(app, lines, version)
+}
+
+// appSummary is what is kept for one app.
+type appSummary struct {
+	App     string `json:"app"`
+	Version int    `json:"version"`
+	Lessons int    `json:"lessons"`
+	Tasks   int    `json:"tasks"`
+	Recipes int    `json:"recipes"`
+	Review  bool   `json:"review_due,omitempty"`
+}
+
+// listApps summarizes every app with lessons, task records or recipes.
+func listApps() ([]appSummary, error) {
+	ents, err := os.ReadDir(lessonsDir())
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []appSummary
+	seen := map[string]bool{}
+	for _, e := range ents {
+		name := e.Name()
+		for _, ext := range []string{".tasks.jsonl", ".recipes.json", ".md"} {
+			if app, ok := strings.CutSuffix(name, ext); ok && !seen[app] {
+				seen[app] = true
+				lines, v, _ := readLessons(app)
+				tasks, _ := readTasks(app)
+				rs, _ := readRecipes(app)
+				out = append(out, appSummary{App: app, Version: v, Lessons: len(lines), Tasks: len(tasks), Recipes: len(rs),
+					Review: review(app, v, tasks) != ""})
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 // task is the record of one finished task: what it cost, under which lessons.

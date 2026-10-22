@@ -59,7 +59,7 @@ codex plugin marketplace add https://github.com/Lucklyric/virtual-nanokvm.git
 codex plugin add vnkvm@virtual-nanokvm
 ```
 
-Both install the MCP server and a `vnkvm` skill that teaches the agent the screenshot → act → check loop. The server builds itself on first start (Go and the Xcode command line tools are needed; the one-line installer sets them up). Then run `/vnkvm:setup` in Claude Code, or ask Codex to "run the vnkvm doctor": it checks and requests the Accessibility and Screen Recording permissions for the app running the agent. Set `VNKVM_INPUT=driver` to use the driver input instead of `sys`.
+Both install the MCP server and a `vnkvm` skill that teaches the agent the screenshot → act → check loop. The server builds itself on first start (Go and the Xcode command line tools are needed; the one-line installer sets them up). Re-running the installer with `--claude` or `--codex` also updates the plugins. Then run `/vnkvm:setup` in Claude Code, or ask Codex to "run the vnkvm doctor": it checks and requests the Accessibility and Screen Recording permissions for the app running the agent. Set `VNKVM_INPUT=driver` to use the driver input instead of `sys`.
 
 **Any other MCP client**
 
@@ -104,7 +104,7 @@ The agent gets faster with use in three ways:
 
 - **Predictions.** An `expect` step lets the agent chain past a screen change it can predict (a menu opening, a dialog appearing). If the change does not come, the sequence stops before the next steps.
 - **Recipes.** A sequence that worked can be saved and replayed in one call. Recipes store window-relative positions and never the typed text, which becomes a placeholder. Screenshots of an app list its recipes.
-- **Measured lessons.** At the end of each task the agent reports it done, and the server records what it cost (tool calls, steps per call, misses) under the current lessons version. Every fifth task, or when a new version makes tasks slower, the server asks the agent to revise the lessons. Each lesson is tagged with the version that added it, so a bad change can be traced and dropped.
+- **Measured lessons.** At the end of each task the agent reports it done, and the server records what it cost (tool calls, steps per call, misses) under the current lessons version. Every fifth task, or when a new version makes tasks slower, the server asks the agent to revise the lessons; `/vnkvm:review` in Claude Code runs a review on demand. Each lesson is tagged with the version that added it, so a bad change can be traced and dropped.
 
 ### Watch and control from a browser
 

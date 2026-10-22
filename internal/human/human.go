@@ -61,6 +61,7 @@ type Engine struct {
 	Tick time.Duration
 
 	mu      sync.Mutex
+	speed   float64 // multiplies the pace of moves, clicks and key presses; 0 means 1
 	buttons uint32
 	gain    float64 // estimated cursor points moved per report unit
 	anchor  Point   // where the cursor should be while the engine holds it still
@@ -94,16 +95,45 @@ func sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// Speed limits: faster than MaxSpeed, moves get too few reports to curve.
+const (
+	MinSpeed = 0.25
+	MaxSpeed = 5.0
+)
+
+// SetSpeed sets the pace of moves, clicks and key presses: 2 is twice as
+// fast as a typical person, 0.5 half as fast. Paths keep their shape and the
+// takeover check stays on. Typing keeps its own words-per-minute pace. It
+// returns the previous speed.
+func (e *Engine) SetSpeed(s float64) (float64, error) {
+	if s < MinSpeed || s > MaxSpeed {
+		return 0, fmt.Errorf("speed must be %.2g to %.2g (1 is a typical person)", MinSpeed, MaxSpeed)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	prev := e.pace()
+	e.speed = s
+	return prev, nil
+}
+
+func (e *Engine) pace() float64 {
+	if e.speed == 0 {
+		return 1
+	}
+	return e.speed
+}
+
 func (e *Engine) uniform(lo, hi float64) float64 { return lo + e.Rand.Float64()*(hi-lo) }
 
 // lognormal draws a duration around medianMS with spread sigma, the shape of
-// human reaction and dwell times (mostly short, sometimes long).
+// human reaction and dwell times (mostly short, sometimes long), at the
+// engine's speed.
 func (e *Engine) lognormal(medianMS, sigma float64) time.Duration {
-	return time.Duration(medianMS * math.Exp(e.Rand.NormFloat64()*sigma) * float64(time.Millisecond))
+	return time.Duration(medianMS * math.Exp(e.Rand.NormFloat64()*sigma) / e.pace() * float64(time.Millisecond))
 }
 
 func (e *Engine) pause(ctx context.Context, loMS, hiMS float64) error {
-	return e.Sleep(ctx, time.Duration(e.uniform(loMS, hiMS)*float64(time.Millisecond)))
+	return e.Sleep(ctx, time.Duration(e.uniform(loMS, hiMS)/e.pace()*float64(time.Millisecond)))
 }
 
 // hold records where the cursor is, so still can tell if a hand moves it.
@@ -228,7 +258,7 @@ func (e *Engine) moveTo(ctx context.Context, target Point, targetSize float64) (
 // fitts returns a movement time from Fitts's law, T = a + b*log2(D/W + 1),
 // with per-move variation.
 func (e *Engine) fitts(dist, width float64) time.Duration {
-	sec := (0.08 + 0.13*math.Log2(dist/width+1)) * e.uniform(0.85, 1.15)
+	sec := (0.08 + 0.13*math.Log2(dist/width+1)) * e.uniform(0.85, 1.15) / e.pace()
 	return time.Duration(sec * float64(time.Second))
 }
 

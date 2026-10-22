@@ -350,3 +350,37 @@ func TestRelayFollowsRemoteHand(t *testing.T) {
 		}
 	}
 }
+
+func TestSpeedScalesMovesAndClicks(t *testing.T) {
+	timed := func(speed float64) time.Duration {
+		var total time.Duration
+		for seed := uint64(1); seed <= 20; seed++ {
+			e, _, scr := newSim(seed, Point{100, 100})
+			if speed != 1 {
+				if _, err := e.SetSpeed(speed); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := e.MoveTo(context.Background(), Point{1300, 800}, 20)
+			if err != nil || math.Abs(got.X-1300) >= 1 || math.Abs(got.Y-800) >= 1 {
+				t.Fatalf("speed %v seed %d: ended at %v, %v", speed, seed, got, err)
+			}
+			if err := e.Click(context.Background(), Left, 1); err != nil {
+				t.Fatal(err)
+			}
+			total += scr.elapsed
+		}
+		return total / 20
+	}
+	normal, fast, fastest := timed(1), timed(2), timed(MaxSpeed)
+	t.Logf("1400 pt move and click: speed 1 %v, 2 %v, %v %v", normal, fast, MaxSpeed, fastest)
+	if fast > normal*7/10 || fastest > normal*4/10 {
+		t.Fatalf("move and click: normal %v, speed 2 %v, speed %v %v", normal, fast, MaxSpeed, fastest)
+	}
+	e, _, _ := newSim(1, Point{})
+	for _, bad := range []float64{0, 0.1, 6} {
+		if _, err := e.SetSpeed(bad); err == nil {
+			t.Fatalf("speed %v accepted", bad)
+		}
+	}
+}

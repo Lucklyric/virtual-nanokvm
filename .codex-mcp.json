@@ -4,7 +4,7 @@
       "command": "/bin/sh",
       "args": ["-c", "exec ./scripts/vnkvm-mcp \"$@\"", "--"],
       "cwd": ".",
-      "env_vars": ["PATH", "HOME", "GOPATH", "GOCACHE", "GOMODCACHE", "VNKVM_INPUT", "VNKVM_ALLOW_DISPLAY", "VNKVM_LESSONS_DIR"],
+      "env_vars": ["PATH", "HOME", "GOPATH", "GOCACHE", "GOMODCACHE", "VNKVM_INPUT", "VNKVM_ALLOW_DISPLAY", "VNKVM_LESSONS_DIR", "VNKVM_MOUSE_SPEED"],
       "startup_timeout_sec": 120
     }
   }

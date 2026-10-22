@@ -343,3 +343,14 @@ func TestMaxAgeRefusesAnOldShot(t *testing.T) {
 		t.Fatalf("without max_age: %s", text(res))
 	}
 }
+
+func TestSpeedIsPerCall(t *testing.T) {
+	scr := &fakeScreen{windows: []screen.Window{{ID: 7, PID: 42, App: "Notes", X: 100, Y: 80, Width: 800, Height: 600}}}
+	cs := connect(t, scr, Options{})
+	if res := callTool(t, cs, "key", map[string]any{"keys": "a", "speed": 9}); !res.IsError || !strings.Contains(text(res), "speed must be") {
+		t.Fatalf("speed 9 accepted: %s", text(res))
+	}
+	if res := callTool(t, cs, "act", map[string]any{"speed": 3, "observe": false, "steps": []map[string]any{{"do": "key", "keys": "a"}}}); res.IsError {
+		t.Fatalf("speed 3: %s", text(res))
+	}
+}

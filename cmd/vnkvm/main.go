@@ -135,6 +135,7 @@ func main() {
 	useTailscale := fs.Bool("tailscale", false, "serve: share on your tailnet (HTTPS via tailscale serve when the tailnet has HTTPS certificates)")
 	tsHTTPSPort := fs.Int("tailscale-https-port", 8443, "serve: HTTPS port for tailscale serve")
 	fix := fs.Bool("fix", false, "doctor: ask macOS for missing permissions")
+	speed := fs.Float64("speed", envFloat("VNKVM_MOUSE_SPEED", 1), "pace of mouse moves, clicks and key presses: 1 is a typical person, 2 twice as fast (0.25 to 5)")
 	allowDisplay := fs.Bool("allow-display", os.Getenv("VNKVM_ALLOW_DISPLAY") == "1", "mcp: allow whole-display screenshots (default: one app window at a time)")
 	fs.Parse(os.Args[2:])
 	args := fs.Args()
@@ -159,6 +160,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	engine := human.New(backend, screen.Cursor{})
+	if _, err := engine.SetSpeed(*speed); err != nil {
+		log.Fatal(err)
+	}
 
 	switch cmd {
 	case "mcp":
@@ -289,4 +293,12 @@ func openBackend(name, socket string, dryRun bool) (hid.Backend, error) {
 		return hid.NewCGEvent()
 	}
 	return nil, fmt.Errorf("unknown input %q (want driver or sys)", name)
+}
+
+// envFloat reads a number from the environment, or returns def.
+func envFloat(name string, def float64) float64 {
+	if v, err := strconv.ParseFloat(os.Getenv(name), 64); err == nil {
+		return v
+	}
+	return def
 }

@@ -27,6 +27,8 @@ A move never jumps, and no two moves are the same. Each one has:
 - an overshoot and correction on some long moves
 - a slight tremor that fades near the target
 
+The pace is adjustable. `speed` on `act` and the mouse and key tools sets it for one call: 1 is a typical person (the default), 2 twice as fast, 0.5 half as fast, from 0.25 to 5. `VNKVM_MOUSE_SPEED` (or `--speed`) changes the default. Paths keep their shape, and grabbing the mouse still stops vnkvm. Typing keeps its own words-per-minute pace.
+
 ![Different paths between the same two points](docs/img/trajectories.svg)
 
 ![Speed over time](docs/img/speed-profile.svg)

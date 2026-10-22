@@ -59,10 +59,11 @@ The model's turns cost the most, then cursor travel (about 0.5 to 1 s per human-
 3. **`menu` for commands with no shortcut you know,** instead of opening menus by clicking.
 4. **Fewer moves.** Order clicks so the cursor travels short distances; click in place (no `x, y`) when the cursor is already there.
 5. **`size` only for small targets.** A small `size` slows the approach on purpose; leave it out for normal buttons.
-6. **Low detail, zoom only on doubt, `mark` only before risky clicks.**
-7. **Do not check every step.** Let the observation at the end of `act` show the result; add `wait_for` only where the next step depends on something loading.
-8. **Stay in one app.** Each switch costs a new look.
-9. **Record lessons** when something was slow, so the next task in that app skips the detour.
+6. **`speed` when the person asks for it,** or for long runs of easy clicks they are not watching: `"speed": 2` on `act` is twice as fast as a typical person, up to 5. Keep the default (1) for small targets and when the person is watching or wants it to look natural. Typing speed is `wpm`, not `speed`.
+7. **Low detail, zoom only on doubt, `mark` only before risky clicks.**
+8. **Do not check every step.** Let the observation at the end of `act` show the result; add `wait_for` only where the next step depends on something loading.
+9. **Stay in one app.** Each switch costs a new look.
+10. **Record lessons** when something was slow, so the next task in that app skips the detour.
 
 ## Games and other canvas apps
 

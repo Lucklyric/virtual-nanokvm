@@ -61,6 +61,7 @@ The bridge keeps no state about intent. It forwards one report per line (`K`, `P
 A `MoveTo(target, size)` call:
 
 1. **Duration** comes from Fitts's law, `T = 0.08 + 0.13·log2(D/W + 1)` seconds, with ±15% variation. A 1400-point move to a 20-point target takes about 0.8 s.
+   A speed multiplier (`SetSpeed`, 0.25 to 5, default 1) divides this and every human delay (reaction, hover, click hold, key gaps). Report ticks and the corrections at the end stay the same, so a 1400-point move plus click takes about 1.8 s at speed 1, 0.9 s at 2 and 0.44 s at 5 in the simulation. Typing keeps its own `wpm`. The MCP tools take `speed` per call; `VNKVM_MOUSE_SPEED` or `--speed` sets the default.
 2. **Path** is a cubic Bézier curve bent to one side by 4–20% of the distance, like a wrist or elbow arc.
 3. **Speed** follows the minimum-jerk profile `s(τ) = 10τ³ − 15τ⁴ + 6τ⁵`. It starts slow, peaks mid-way, and ends slow.
 4. **Tremor** adds a small smoothed random jitter that fades out near the target.
@@ -188,5 +189,6 @@ Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds 
 - **v2.3**: app-only screenshots by default, titles hidden for other apps, per-app lessons with efficiency hints.
 - **v2.4**: background mode through Accessibility and per-app events, `hold` and `menu` steps, foreground speed and game guidance in the skill.
 - **v2.5**: `expect` steps to chain past predicted changes, saved recipes, versioned lessons measured per task with server-prompted reviews.
-- **v2.6 (this)**: waits watch the window itself on any display, shot age and `max_age`, cursor landing reports and refusal when short, lessons versions per revision, `/vnkvm:review`, PATH and plugin updates in the launcher and installer.
+- **v2.6**: waits watch the window itself on any display, shot age and `max_age`, cursor landing reports and refusal when short, lessons versions per revision, `/vnkvm:review`, PATH and plugin updates in the launcher and installer.
+- **v2.7 (this)**: adjustable pace with `speed` per call and `VNKVM_MOUSE_SPEED`.
 - **v3**: launchd units for the bridge and daemon, full-display capture of secondary screens (windows on any screen already work), and Linux (USB gadget on `dummy_hcd` or USB/IP) and Windows targets.

@@ -1,6 +1,6 @@
 {
   "name": "vnkvm",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Use the Mac's mouse and keyboard like a person: human-like cursor paths, typing rhythm, screen and window screenshots, over MCP.",
   "author": { "name": "Lucklyric" },
   "homepage": "https://github.com/Lucklyric/virtual-nanokvm",

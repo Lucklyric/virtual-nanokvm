@@ -107,6 +107,10 @@ type modeArg struct {
 	Mode string `json:"mode,omitempty" jsonschema:"foreground (default): the real cursor and keyboard, human-like; background: act on the shot's app without the cursor or bringing it forward (controls pressed through Accessibility, keys sent to that app). Use background when the person asks for it"`
 }
 
+type speedArg struct {
+	Speed float64 `json:"speed,omitempty" jsonschema:"pace of mouse moves, clicks and key presses for this call: 1 is a typical person (the default), 2 twice as fast, 0.5 half as fast; 0.25 to 5. Typing keeps its wpm"`
+}
+
 type observeArg struct {
 	Observe bool `json:"observe,omitempty" jsonschema:"after acting, wait for the screen to settle and return a new low-detail shot of the same window or display"`
 }
@@ -117,6 +121,7 @@ type moveArgs struct {
 	Y    float64 `json:"y" jsonschema:"pixel y in that shot"`
 	Size float64 `json:"size,omitempty" jsonschema:"rough target size in that shot's pixels; small targets get a slower, careful approach"`
 	observeArg
+	speedArg
 	modeArg
 }
 
@@ -128,6 +133,7 @@ type clickArgs struct {
 	Button string   `json:"button,omitempty" jsonschema:"left (default) or right"`
 	Count  int      `json:"count,omitempty" jsonschema:"1 for a click (default), 2 for a double click"`
 	observeArg
+	speedArg
 	modeArg
 }
 
@@ -136,6 +142,7 @@ type dragArgs struct {
 	X    float64 `json:"x" jsonschema:"drop pixel x in that shot"`
 	Y    float64 `json:"y" jsonschema:"drop pixel y in that shot"`
 	observeArg
+	speedArg
 	modeArg
 }
 
@@ -143,6 +150,7 @@ type scrollArgs struct {
 	DY int `json:"dy,omitempty" jsonschema:"wheel notches; positive scrolls down"`
 	DX int `json:"dx,omitempty" jsonschema:"wheel notches; positive scrolls right"`
 	observeArg
+	speedArg
 	modeArg
 }
 
@@ -156,6 +164,7 @@ type typeArgs struct {
 type keyArgs struct {
 	Keys string `json:"keys" jsonschema:"key or combination, e.g. enter, cmd+c, cmd+shift+4, ctrl+left"`
 	observeArg
+	speedArg
 	modeArg
 }
 
@@ -166,7 +175,8 @@ type actArgs struct {
 	Steps   []step            `json:"steps,omitempty" jsonschema:"actions in order; the sequence stops at the first failure"`
 	Observe *bool             `json:"observe,omitempty" jsonschema:"return a new low-detail shot after the steps (default true)"`
 	Width   int               `json:"width,omitempty" jsonschema:"width of that shot (default 1024)"`
-	MaxAge  int               `json:"max_age,omitempty" jsonschema:"refuse coordinates from shots older than this many milliseconds, for targets that move (characters, live feeds); default any age"`
+	speedArg
+	MaxAge int `json:"max_age,omitempty" jsonschema:"refuse coordinates from shots older than this many milliseconds, for targets that move (characters, live feeds); default any age"`
 	modeArg
 }
 
@@ -240,7 +250,7 @@ type doctorReport struct {
 
 // New builds the MCP server.
 func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.6.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.7.0"}, nil)
 	reg := &shots{}
 	st := &stats{}
 	// Every tool call is a model turn: the cost the lessons try to bring down.
@@ -254,7 +264,7 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 	})
 
 	// do runs steps, then optionally looks again. Every action tool uses it.
-	do := func(ctx context.Context, steps []step, defShot int, observe bool, width int, batch bool, mode string, maxAge int) (*mcp.CallToolResult, actReport, error) {
+	do := func(ctx context.Context, steps []step, defShot int, observe bool, width int, batch bool, mode string, maxAge int, speed float64) (*mcp.CallToolResult, actReport, error) {
 		r := &runner{e: e, scr: scr, reg: reg, ax: opt.Background, maxAge: time.Duration(maxAge) * time.Millisecond}
 		switch mode {
 		case "", "foreground":
@@ -268,6 +278,13 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 		}
 		if err := r.validate(steps, defShot); err != nil {
 			return nil, actReport{}, err
+		}
+		if speed != 0 {
+			prev, err := e.SetSpeed(speed)
+			if err != nil {
+				return nil, actReport{}, err
+			}
+			defer e.SetSpeed(prev)
 		}
 		lines, runErr := r.run(ctx, steps)
 		hint := st.action(!batch, len(lines), runErr)
@@ -500,7 +517,7 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 			}
 			steps, app = append(pre, steps...), sh.App
 		}
-		res, rep, err := do(ctx, steps, in.Shot, observe, in.Width, true, in.Mode, in.MaxAge)
+		res, rep, err := do(ctx, steps, in.Shot, observe, in.Width, true, in.Mode, in.MaxAge, in.Speed)
 		if err != nil || res == nil {
 			return res, rep, err
 		}
@@ -593,7 +610,7 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 		Name:        "mouse_move",
 		Description: "Move the mouse to a pixel of a shot along a human-like path.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in moveArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "move", X: &in.X, Y: &in.Y, Size: in.Size}}, in.Shot, in.Observe, 0, false, in.Mode, 0)
+		return do(ctx, []step{{Do: "move", X: &in.X, Y: &in.Y, Size: in.Size}}, in.Shot, in.Observe, 0, false, in.Mode, 0, in.Speed)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -609,35 +626,35 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 		case in.Count == 2:
 			st.Do = "double_click"
 		}
-		return do(ctx, []step{st}, in.Shot, in.Observe, 0, false, in.Mode, 0)
+		return do(ctx, []step{st}, in.Shot, in.Observe, 0, false, in.Mode, 0, in.Speed)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "drag",
 		Description: "Hold the left button at the current position, move to a pixel of a shot and release. Move to the start first.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in dragArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "drag", X: &in.X, Y: &in.Y}}, in.Shot, in.Observe, 0, false, in.Mode, 0)
+		return do(ctx, []step{{Do: "drag", X: &in.X, Y: &in.Y}}, in.Shot, in.Observe, 0, false, in.Mode, 0, in.Speed)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "scroll",
 		Description: "Turn the scroll wheel at the current cursor position.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in scrollArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "scroll", DX: in.DX, DY: in.DY}}, 0, in.Observe, 0, false, in.Mode, 0)
+		return do(ctx, []step{{Do: "scroll", DX: in.DX, DY: in.DY}}, 0, in.Observe, 0, false, in.Mode, 0, in.Speed)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "type_text",
 		Description: "Type text with human rhythm into the focused field.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in typeArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "type", Text: in.Text, WPM: in.WPM}}, 0, in.Observe, 0, false, in.Mode, 0)
+		return do(ctx, []step{{Do: "type", Text: in.Text, WPM: in.WPM}}, 0, in.Observe, 0, false, in.Mode, 0, 0)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "key",
 		Description: "Press a key or key combination such as enter, escape, cmd+c, cmd+shift+4.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in keyArgs) (*mcp.CallToolResult, actReport, error) {
-		return do(ctx, []step{{Do: "key", Keys: in.Keys}}, 0, in.Observe, 0, false, in.Mode, 0)
+		return do(ctx, []step{{Do: "key", Keys: in.Keys}}, 0, in.Observe, 0, false, in.Mode, 0, in.Speed)
 	})
 
 	return s

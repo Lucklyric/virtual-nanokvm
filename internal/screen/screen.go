@@ -45,8 +45,17 @@ func MainBounds() (width, height float64) {
 
 // Capture grabs the main display (window 0) or one window, even when other
 // windows cover it, at full resolution. It needs the Screen Recording
-// permission for the app that launched this process.
+// permission for the app that launched this process. It captures in process
+// and falls back to screencapture when that fails.
 func Capture(ctx context.Context, window uint32) (image.Image, error) {
+	if img, err := captureSCK(window); err == nil {
+		return img, nil
+	}
+	return captureCommand(ctx, window)
+}
+
+// captureCommand captures with the screencapture command.
+func captureCommand(ctx context.Context, window uint32) (image.Image, error) {
 	dir, err := os.MkdirTemp("", "vnkvm-shot-")
 	if err != nil {
 		return nil, err

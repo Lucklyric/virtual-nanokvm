@@ -250,7 +250,7 @@ type doctorReport struct {
 
 // New builds the MCP server.
 func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.7.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.7.1"}, nil)
 	reg := &shots{}
 	st := &stats{}
 	// Every tool call is a model turn: the cost the lessons try to bring down.

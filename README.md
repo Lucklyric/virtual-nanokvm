@@ -70,6 +70,8 @@ git clone https://github.com/Lucklyric/virtual-nanokvm.git
 virtual-nanokvm/scripts/vnkvm-mcp   # MCP server on stdio
 ```
 
+The one-line installer also links the launcher as `~/.local/bin/vnkvm-mcp`. Point MCP clients and scripts at that path: it stays the same across updates, and plugin cache paths do not.
+
 | Tool | Does |
 |---|---|
 | `screenshot` | A low-detail look at the screen or one app window (even when covered), or a sharp zoom of part of an earlier shot, optionally with a crosshair where a click would land |
@@ -111,8 +113,8 @@ The agent gets faster with use in three ways:
 ### Watch and control from a browser
 
 ```sh
-vnkvm serve --input sys              # on your local network
-vnkvm serve --input sys --tailscale  # on your tailnet, from anywhere
+vnkvm serve              # on your local network
+vnkvm serve --tailscale  # on your tailnet, from anywhere
 ```
 
 It prints two links: a control link (watch, plus mouse and keyboard) and a view link (watch only). Click **Take control** to drive the Mac; your own hand movement is relayed as-is. One person controls at a time, and every key and button is released when they leave.
@@ -127,9 +129,10 @@ Flags: `--listen` (default `:8090`), `--fps` (default 10), `--width` (default 12
 
 ```sh
 make service
-bin/vnkvm move  --input sys 800 450
-bin/vnkvm click --input sys 800 450
-bin/vnkvm type  --input sys "hello"
+bin/vnkvm move  800 450
+bin/vnkvm click 800 450
+bin/vnkvm type  "hello"
+bin/vnkvm version
 ```
 
 ### Driver input (real USB HID)
@@ -140,7 +143,7 @@ bin/vnkvm type  --input sys "hello"
    make bridge
    sudo bin/vnkvm-hid-bridge --socket /var/run/vnkvm-hid.sock --owner $(id -u)
    ```
-3. Use `--input driver` (the default).
+3. Use `--input driver` (or `VNKVM_INPUT=driver` for the plugins). The default is `sys`; when the bridge socket is missing, `driver` falls back to `sys` and says so on stderr.
 
 See [docs/design.md](docs/design.md) for the full design.
 

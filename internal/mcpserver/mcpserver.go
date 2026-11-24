@@ -224,6 +224,9 @@ type recipeReport struct {
 	Recipes []recipe `json:"recipes"`
 }
 
+// Version is the vnkvm release. Keep the two plugin.json files equal to it.
+const Version = "0.7.2"
+
 // Options configure the server.
 type Options struct {
 	BridgeSocket string     // where doctor looks for the driver input bridge
@@ -250,7 +253,7 @@ type doctorReport struct {
 
 // New builds the MCP server.
 func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: "0.7.1"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "virtual-nanokvm", Version: Version}, nil)
 	reg := &shots{}
 	st := &stats{}
 	// Every tool call is a model turn: the cost the lessons try to bring down.

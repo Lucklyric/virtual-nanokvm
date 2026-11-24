@@ -6,10 +6,12 @@
 //	vnkvm type  [flags] TEXT     type text
 //	vnkvm serve [flags]          browser viewer: live stream and remote control
 //	vnkvm doctor [--fix]         check permissions and setup; --fix asks macOS
+//	vnkvm version                print the version
 //
 // Flags:
 //
-//	--input driver|sys    input path (default driver)
+//	--input sys|driver    input path (default sys; driver falls back to sys
+//	                      when the bridge socket is missing)
 //	--bridge-socket PATH  vnkvm-hid-bridge socket (driver input)
 //	--dry-run             record reports instead of sending them
 //
@@ -32,6 +34,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -113,7 +116,7 @@ func (c appCursor) Position() (human.Point, error) {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: vnkvm mcp|move X Y|click X Y|type TEXT|serve|doctor [--input driver|sys] [--bridge-socket PATH] [--dry-run]")
+	fmt.Fprintln(os.Stderr, "usage: vnkvm mcp|move X Y|click X Y|type TEXT|serve|doctor|version [--input sys|driver] [--bridge-socket PATH] [--dry-run]")
 	os.Exit(2)
 }
 
@@ -122,8 +125,12 @@ func main() {
 		usage()
 	}
 	cmd := os.Args[1]
+	if cmd == "version" || cmd == "--version" {
+		fmt.Println("vnkvm", mcpserver.Version)
+		return
+	}
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-	input := fs.String("input", "driver", "input path: driver (virtual USB HID) or sys (synthetic system events)")
+	input := fs.String("input", "sys", "input path: sys (synthetic system events) or driver (virtual USB HID; falls back to sys when the bridge socket is missing)")
 	socket := fs.String("bridge-socket", defaultSocket, "unix socket of vnkvm-hid-bridge")
 	dryRun := fs.Bool("dry-run", false, "record HID reports instead of sending them")
 	listen := fs.String("listen", ":8090", "serve: address to listen on")
@@ -288,6 +295,10 @@ func openBackend(name, socket string, dryRun bool) (hid.Backend, error) {
 	}
 	switch name {
 	case "driver":
+		if _, err := os.Stat(socket); errors.Is(err, os.ErrNotExist) {
+			log.Printf("driver input: no bridge socket at %s (is vnkvm-hid-bridge running?); using sys input instead", socket)
+			return hid.NewCGEvent()
+		}
 		return hid.DialBridge(socket)
 	case "sys":
 		return hid.NewCGEvent()

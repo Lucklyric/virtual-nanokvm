@@ -56,6 +56,8 @@ say "Building..."
 (cd "$HOME_DIR" && go build -o bin/vnkvm ./cmd/vnkvm)
 mkdir -p "$BIN_DIR"
 ln -sf "$HOME_DIR/bin/vnkvm" "$BIN_DIR/vnkvm"
+# A launcher path that stays the same across updates, for MCP clients.
+ln -sf "$HOME_DIR/scripts/vnkvm-mcp" "$BIN_DIR/vnkvm-mcp"
 
 if [ "$WANT_CLAUDE" = 1 ]; then
 	if command -v claude >/dev/null 2>&1; then
@@ -92,4 +94,5 @@ echo
 echo "Next:"
 echo "  vnkvm serve                 # watch and control from a browser on your network"
 echo "  vnkvm serve --tailscale     # ...or on your tailnet"
-echo "  vnkvm move --input sys 800 450"
+echo "  vnkvm move 800 450          # move the cursor like a person would"
+echo "  $BIN_DIR/vnkvm-mcp   # MCP server on stdio, for any MCP client (path stays the same across updates)"

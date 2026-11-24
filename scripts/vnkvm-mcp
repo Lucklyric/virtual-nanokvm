@@ -7,7 +7,16 @@
 set -e
 # Apps started from the Dock get a minimal PATH; add where Go usually lives.
 PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/local/go/bin:$HOME/go/bin"
-root=$(cd "$(dirname "$0")/.." && pwd)
+# The installer links this script into a bin directory; find the real file.
+self=$0
+while [ -L "$self" ]; do
+	link=$(readlink "$self")
+	case "$link" in
+	/*) self=$link ;;
+	*) self=$(dirname "$self")/$link ;;
+	esac
+done
+root=$(cd "$(dirname "$self")/.." && pwd)
 bin="$root/bin/vnkvm"
 
 if [ ! -x "$bin" ] || [ -n "$(find "$root/cmd" "$root/internal" "$root/go.mod" -newer "$bin" -name '*.go' -o -newer "$bin" -name go.mod 2>/dev/null | head -1)" ]; then

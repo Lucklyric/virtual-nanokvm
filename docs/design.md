@@ -38,8 +38,10 @@ Only input differs. Capture, MCP and the human-like engine are shared.
 
 | `--input` | How input reaches macOS | Needs |
 |---|---|---|
-| `driver` (default) | Virtual USB HID device. macOS treats it as hardware; the mouse is relative and accelerated. | Karabiner driver, root bridge |
-| `sys` | Synthetic system events (`CGEventPost`), the way remote-desktop tools do it. Apps that check the event source can tell. | Accessibility permission only |
+| `sys` (default) | Synthetic system events (`CGEventPost`), the way remote-desktop tools do it. Apps that check the event source can tell. | Accessibility permission only |
+| `driver` | Virtual USB HID device. macOS treats it as hardware; the mouse is relative and accelerated. | Karabiner driver, root bridge |
+
+`sys` is the default because it needs no driver. `--input driver` falls back to `sys`, with a line on stderr, when the bridge socket does not exist; a socket that exists but refuses the connection is still an error.
 
 The `sys` input takes the same relative reports and turns them into absolute moves and drags from the current cursor position. It compares each keyboard report with the last one to find which keys went down or up, and maps HID usages to macOS virtual key codes. It sets the click count itself, because macOS does not infer double clicks from the timing of synthetic events.
 
@@ -160,7 +162,7 @@ The repo is a plugin marketplace for both Claude Code and Codex. Both install st
 | Claude Code | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | `.mcp.json` (`${CLAUDE_PLUGIN_ROOT}/scripts/vnkvm-mcp`) |
 | Codex | `.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json` | `.codex-mcp.json` (`cwd` = plugin root) |
 
-Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds `bin/vnkvm` on first start and rebuilds when the source is newer, then runs `vnkvm mcp --input ${VNKVM_INPUT:-sys}`.
+Both share `skills/vnkvm/SKILL.md` and `scripts/vnkvm-mcp`. The launcher builds `bin/vnkvm` on first start and rebuilds when the source is newer, then runs `vnkvm mcp --input ${VNKVM_INPUT:-sys}`. It follows symlinks to find the checkout, so the installer links it as `~/.local/bin/vnkvm-mcp`: a path that stays the same across updates, where a plugin cache path carries the version.
 
 ## Setup (manual, once per machine)
 

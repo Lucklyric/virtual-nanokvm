@@ -9,13 +9,16 @@ package screen
 // vnkvm_capture_rgba captures one window (0: the main display) at full
 // resolution, without the cursor, into a malloc'd premultiplied RGBA buffer.
 // The pixels keep the frame's own color space, as screencapture does.
-// Returns 0, or a negative step number on failure. The caller frees *out.
-static int vnkvm_capture_rgba(uint32_t window, uint8_t **out, int *outW, int *outH) {
+// Returns 0, or a negative step number on failure, with what macOS reported
+// in *why when it said anything. The caller frees *out and *why.
+static int vnkvm_capture_rgba(uint32_t window, uint8_t **out, int *outW, int *outH, char **why) {
 	CGMainDisplayID(); // opens the window server connection ScreenCaptureKit needs
 	__block SCContentFilter *filter = nil;
+	__block NSString *reason = nil;
 	dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 	[SCShareableContent getShareableContentExcludingDesktopWindows:NO onScreenWindowsOnly:NO
 		completionHandler:^(SCShareableContent *content, NSError *error) {
+			if (error != nil) reason = error.localizedDescription;
 			if (window == 0) {
 				for (SCDisplay *d in content.displays) {
 					if (d.displayID == CGMainDisplayID()) {
@@ -31,7 +34,12 @@ static int vnkvm_capture_rgba(uint32_t window, uint8_t **out, int *outW, int *ou
 			}
 			dispatch_semaphore_signal(sem);
 		}];
-	if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0 || filter == nil) {
+	if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0) {
+		*why = strdup("no answer within 3 s");
+		return -1;
+	}
+	if (filter == nil) {
+		if (reason != nil) *why = strdup(reason.UTF8String);
 		return -1;
 	}
 	CGRect rect = filter.contentRect;
@@ -47,10 +55,15 @@ static int vnkvm_capture_rgba(uint32_t window, uint8_t **out, int *outW, int *ou
 	[SCScreenshotManager captureImageWithFilter:filter configuration:cfg
 		completionHandler:^(CGImageRef img, NSError *error) {
 			if (img != NULL) image = CGImageRetain(img);
+			if (error != nil) reason = error.localizedDescription;
 			dispatch_semaphore_signal(sem);
 		}];
-	if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0 || image == NULL) {
-		if (image != NULL) CGImageRelease(image);
+	if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) != 0) {
+		*why = strdup("no answer within 3 s");
+		return -2;
+	}
+	if (image == NULL) {
+		if (reason != nil) *why = strdup(reason.UTF8String);
 		return -2;
 	}
 
@@ -84,6 +97,7 @@ static int vnkvm_capture_rgba(uint32_t window, uint8_t **out, int *outW, int *ou
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"unsafe"
@@ -95,8 +109,16 @@ import (
 func captureSCK(window uint32) (*image.RGBA, error) {
 	var buf *C.uint8_t
 	var w, h C.int
-	if rc := C.vnkvm_capture_rgba(C.uint32_t(window), &buf, &w, &h); rc != 0 {
-		return nil, fmt.Errorf("ScreenCaptureKit capture failed (step %d)", -int(rc))
+	var why *C.char
+	if rc := C.vnkvm_capture_rgba(C.uint32_t(window), &buf, &w, &h, &why); rc != 0 {
+		// What failed, in order: finding the window or display, taking the
+		// picture, reading its pixels.
+		step := [...]string{"the window or display was not offered for capture", "no image came back", "the image could not be read"}[-int(rc)-1]
+		if why != nil {
+			defer C.free(unsafe.Pointer(why))
+			return nil, fmt.Errorf("%s: %s", step, C.GoString(why))
+		}
+		return nil, errors.New(step)
 	}
 	defer C.free(unsafe.Pointer(buf))
 	img := image.NewRGBA(image.Rect(0, 0, int(w), int(h)))

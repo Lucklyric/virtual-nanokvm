@@ -81,7 +81,7 @@ The one-line installer also links the launcher as `~/.local/bin/vnkvm-mcp`. Poin
 | `lessons` | Per-app rules on what made tasks slow and what worked, versioned and measured per task, kept on this Mac |
 | `recipes` | Saved sequences that worked in an app, replayed with one `act` call, kept on this Mac |
 | `cursor_position` | Where the cursor is |
-| `doctor` | Checks permissions, display, driver input and Tailscale |
+| `doctor` | Checks permissions, display, capture path, driver input and Tailscale |
 
 Every image has a shot id, and coordinates are pixels of a named shot. vnkvm maps them to the screen, follows a window that moved, and refuses a window that changed size or a point another window covers. So an agent can look at 1024 px, zoom where it needs detail, and click from either image without mixing them up.
 

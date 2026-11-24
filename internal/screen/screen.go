@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	"github.com/Lucklyric/virtual-nanokvm/internal/human"
 )
@@ -46,12 +48,30 @@ func MainBounds() (width, height float64) {
 // Capture grabs the main display (window 0) or one window, even when other
 // windows cover it, at full resolution. It needs the Screen Recording
 // permission for the app that launched this process. It captures in process
-// and falls back to screencapture when that fails.
+// and falls back to screencapture when that fails. The first fallback is
+// logged with its reason, since that path is several times slower and
+// nothing else shows which one is in use.
 func Capture(ctx context.Context, window uint32) (image.Image, error) {
-	if img, err := captureSCK(window); err == nil {
+	img, err := captureSCK(window)
+	if err == nil {
 		return img, nil
 	}
+	fellBack.Do(func() {
+		log.Printf("screen: in-process capture failed (%v); using the screencapture command instead, which is slower. vnkvm doctor shows the capture path.", err)
+	})
 	return captureCommand(ctx, window)
+}
+
+var fellBack sync.Once
+
+// CapturePath reports which path Capture uses in this process right now, by
+// capturing the main display in process. When that fails, reason says why and
+// Capture runs the screencapture command.
+func CapturePath() (inProcess bool, reason string) {
+	if _, err := captureSCK(0); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
 }
 
 // captureCommand captures with the screencapture command.

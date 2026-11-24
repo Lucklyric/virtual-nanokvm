@@ -47,6 +47,15 @@ func Run(ctx context.Context, bridgeSocket string, fix bool) []Check {
 		ready := screen.DisplayReady()
 		add(Check{Name: "Display", OK: ready, Info: map[bool]string{true: "capturable", false: "not capturable now"}[ready],
 			Fix: "Unlock the Mac and wake the display; macOS hides the screen from capture while locked."})
+		if ready {
+			inProcess, reason := screen.CapturePath()
+			info := "in process (ScreenCaptureKit)"
+			if !inProcess {
+				info = "screencapture command, slower: " + reason
+			}
+			add(Check{Name: "Capture path", OK: inProcess, Optional: true, Info: info,
+				Fix: "Screenshots still work, several times slower. Restart the app that runs vnkvm (or the MCP server); if it stays, allow that app again under Screen & System Audio Recording."})
+		}
 	}
 
 	if _, err := os.Stat(bridgeSocket); err == nil {

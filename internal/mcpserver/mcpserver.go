@@ -225,7 +225,7 @@ type recipeReport struct {
 }
 
 // Version is the vnkvm release. Keep the two plugin.json files equal to it.
-const Version = "0.7.2"
+const Version = "0.7.3"
 
 // Options configure the server.
 type Options struct {
@@ -347,7 +347,7 @@ func New(e *human.Engine, scr Screen, opt Options) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "doctor",
-		Description: "Check setup: macOS version, Accessibility and Screen Recording permissions, whether the display can be captured, driver input, Tailscale. Run it first when a tool fails, and tell the user any FIX lines.",
+		Description: "Check setup: macOS version, Accessibility and Screen Recording permissions, whether the display can be captured and by which path (in process, or the slower screencapture command), driver input, Tailscale. Run it first when a tool fails, and tell the user any FIX lines.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in doctorArgs) (*mcp.CallToolResult, doctorReport, error) {
 		checks := doctor.Run(ctx, opt.BridgeSocket, in.Fix)
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: doctor.Format(checks)}}}, doctorReport{checks}, nil
